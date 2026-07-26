@@ -1,0 +1,53 @@
+schema_version: 5
+locale: ru
+profile_name: Полевой профиль 01
+mode: live
+first_run_complete: false
+storage:
+  data_dir: runtime-data
+  minimum_free_gib: 5.0
+  retention_days: 30
+devices:
+  enable_real_adapters: false
+  adapters: []
+spectrum:
+  center_frequency_hz: 433920000
+  span_hz: 2000000
+  sample_rate_hz: 2400000
+  threshold_level: -72.4
+acoustic:
+  enabled: false
+  source: disabled
+  source_id: microphone-01
+  sample_rate_hz: 48000
+  window_seconds: 1.0
+airspace:
+  enabled: false
+  aircraft_json_path: null
+  stale_after_seconds: 5.0
+fusion:
+  window_seconds: 8.0
+  min_consecutive_observations: 3
+  hold_seconds: 4.0
+map:
+  package_path: null
+  default_zoom: 12
+  tile_cache_mib: 128
+  network_enabled: false
+  online_cache_mib: 256
+location:
+  source: unset
+  gps_port: ""
+  gps_baud: 9600
+  maximum_fix_age_seconds: 5.0
+  maximum_hdop: 4.0
+  verification_radius_m: 50.0
+  maximum_jump_distance_m: 250.0
+  maximum_jump_speed_m_s: 60.0
+ui:
+  experience_level: guided
+  hide_exact_coordinates: true
+logging:
+  level: INFO
+  max_files: 15
+  max_bytes: 20971520

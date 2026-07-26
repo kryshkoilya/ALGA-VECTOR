@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alga-vector"
+version = "0.7.0"
+description = "Russian-first offline Windows desktop foundation for civilian multi-sensor early warning."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+authors = [
+  { name = "Буйвол и Задира" },
+]
+dependencies = [
+  "PySide6-Essentials>=6.8,<7",
+  "numpy>=2.1,<3",
+  "pydantic>=2.10,<3",
+  "PyYAML>=6.0.2,<7",
+  "platformdirs>=4.3,<5",
+]
+
+[project.optional-dependencies]
+hardware = [
+  "pyserial>=3.5,<4",
+  "pyrtlsdr[lib]>=0.5,<1",
+  "pyusb>=1.3,<2",
+]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-qt>=4.4,<5",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+  "mypy>=1.14,<2",
+  "pyinstaller>=6.11,<7",
+  "types-PyYAML>=6.0.12,<7",
+]
+
+[project.scripts]
+alga-vector = "alga_vector.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alga_vector"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "ui: requires a Qt display or QT_QPA_PLATFORM=offscreen",
+  "hardware: requires explicitly attached test hardware",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["alga_vector"]
+warn_unused_ignores = true
