@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -61,4 +63,6 @@ jobs:
         run: python -m mypy src/alga_vector
 
       - name: Pytest
-        run: python -m pytest --basetemp .build-temp/pytest-ci
+        run: |
+          New-Item -ItemType Directory -Force -Path .build-temp | Out-Null
+          python -m pytest --basetemp .build-temp/pytest-ci
