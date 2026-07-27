@@ -198,4 +198,9 @@ def test_event_payload_is_json_serializable_without_probability_claim() -> None:
 
     payload = json.loads(event.to_json())
     assert payload["event_type"] == "NOISE_BACKGROUND"
+    assert payload["technical_label"] == "NOISE_BACKGROUND"
+    assert payload["operator_label"] == "Фон"
+    assert payload["operator_explanation"] == event.explanation_ru
+    assert payload["recommended_action_short"] == "Продолжайте наблюдение."
+    assert payload["recommended_action_detailed"] == event.recommendation_ru
     assert payload["confidence"]["is_calibrated_probability"] is False

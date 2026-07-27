@@ -126,6 +126,7 @@ from alga_vector.storage import (
     prune_spectrum_captures,
 )
 from alga_vector.support import SupportBundleBuilder
+from alga_vector.targets import TargetAggregator, TargetAggregatorConfig
 
 from .multisensor import MultiSensorCoordinator
 from .rf_scan import (
@@ -223,7 +224,27 @@ class ApplicationRuntime:
         self._acquisition_transition_pending = False
         self._rf_scan_forced_background = False
         self._multisensor = MultiSensorCoordinator(config, clock=clock)
-        self._signal_processor = signal_processor or UnifiedSignalProcessor()
+        if signal_processor is None:
+            tracking = config.target_tracking
+            target_aggregator = TargetAggregator(
+                TargetAggregatorConfig(
+                    correlation_window_seconds=(
+                        tracking.correlation_window_seconds
+                    ),
+                    deduplication_window_seconds=(
+                        tracking.deduplication_window_seconds
+                    ),
+                    decay_half_life_seconds=tracking.decay_half_life_seconds,
+                    stale_after_seconds=tracking.stale_after_seconds,
+                    retire_after_seconds=tracking.retire_after_seconds,
+                    maximum_active_targets=tracking.maximum_active_targets,
+                )
+            )
+            self._signal_processor = UnifiedSignalProcessor(
+                target_aggregator=target_aggregator
+            )
+        else:
+            self._signal_processor = signal_processor
         self._last_operator_situation_key: tuple[str, str | None] | None = None
         self._signal_assessment = no_data_assessment(
             self._clock(),
@@ -1571,6 +1592,9 @@ class ApplicationRuntime:
                     snapshot,
                     operator_situation=operator_situation,
                     normalized_events=normalized_events,
+                    targets=self._signal_processor.targets,
+                    current_target=self._signal_processor.current_target,
+                    sensor_readiness=self._signal_processor.sensor_readiness,
                 )
                 primary = operator_situation.primary_event
                 situation_key = (

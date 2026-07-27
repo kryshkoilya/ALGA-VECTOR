@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from alga_vector.sensor_fusion import FusionDecision
     from alga_vector.signal_analysis import RfDecision, SignalAssessment
     from alga_vector.signal_processor import NormalizedEvent, OperatorSituation
+    from alga_vector.targets import FusedTarget, SensorReadinessSnapshot
 
 
 def utc_now() -> datetime:
@@ -122,4 +123,7 @@ class SystemSnapshot:
     signal_decision: RfDecision | None = None
     operator_situation: OperatorSituation | None = None
     normalized_events: tuple[NormalizedEvent, ...] = ()
+    targets: tuple[FusedTarget, ...] = ()
+    current_target: FusedTarget | None = None
+    sensor_readiness: SensorReadinessSnapshot | None = None
     captured_at: datetime = field(default_factory=utc_now)

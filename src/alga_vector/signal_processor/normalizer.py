@@ -704,6 +704,7 @@ class SnapshotEventNormalizer:
                         "sensor-unavailable",
                         device.device_id,
                         device.state.value,
+                        now.isoformat(),
                     ),
                     event_type=NormalizedEventType.SENSOR_UNAVAILABLE,
                     observed_at=now,
@@ -727,6 +728,10 @@ class SnapshotEventNormalizer:
                             explanation_ru="Источник сообщения о состоянии.",
                         ),
                     ),
+                    episode_id=(
+                        f"sensor-unavailable:{device.device_id}:"
+                        f"{device.state.value}"
+                    ),
                     tags=("sensor", "unavailable"),
                 )
             )
@@ -740,7 +745,11 @@ class SnapshotEventNormalizer:
         if not has_rf:
             unavailable.append(
                 self._make_event(
-                    event_id=_stable_id("sensor-unavailable", "rf-receiver"),
+                    event_id=_stable_id(
+                        "sensor-unavailable",
+                        "rf-receiver",
+                        now.isoformat(),
+                    ),
                     event_type=NormalizedEventType.SENSOR_UNAVAILABLE,
                     observed_at=now,
                     received_at=now,
@@ -763,6 +772,7 @@ class SnapshotEventNormalizer:
                             explanation_ru="Синтетическое состояние RF-слоя.",
                         ),
                     ),
+                    episode_id="sensor-unavailable:rf-receiver",
                     tags=("sensor", "unavailable", "rf"),
                 )
             )
@@ -777,6 +787,7 @@ class SnapshotEventNormalizer:
                     event_id=_stable_id(
                         "sensor-unavailable",
                         "direction-finder",
+                        now.isoformat(),
                     ),
                     event_type=NormalizedEventType.SENSOR_UNAVAILABLE,
                     observed_at=now,
@@ -800,6 +811,7 @@ class SnapshotEventNormalizer:
                             explanation_ru="Состояние пеленгационного слоя.",
                         ),
                     ),
+                    episode_id="sensor-unavailable:direction-finder",
                     tags=("sensor", "unavailable", "direction"),
                 )
             )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from alga_vector.domain.enums import (
@@ -25,6 +26,7 @@ from alga_vector.signal_processor import (
     SnapshotEventNormalizer,
     UnifiedSignalProcessor,
 )
+from alga_vector.targets import ConfirmationStage, SensorRole
 
 NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 
@@ -144,6 +146,25 @@ def test_activity_without_df_emits_explicit_direction_fallback() -> None:
     assert len(fallback) == 1
 
 
+def test_processor_projects_activity_into_one_operator_target() -> None:
+    processor = UnifiedSignalProcessor()
+
+    processor.process_snapshot(_snapshot(_decision()))
+
+    assert len(processor.targets) == 1
+    assert processor.current_target is processor.targets[0]
+    assert processor.current_target.confirmation_stage in {
+        ConfirmationStage.SUSPICIOUS_ACTIVITY,
+        ConfirmationStage.LIKELY_SOURCE,
+    }
+    assert processor.current_target.direction is None
+    assert processor.sensor_readiness is not None
+    assert (
+        processor.sensor_readiness.by_role(SensorRole.RTL_SDR).display_name
+        == "RTL-SDR"
+    )
+
+
 def test_background_has_semantic_deduplication_and_does_not_flood_history() -> None:
     background = _decision(
         family=RfFamily.BACKGROUND,
@@ -183,6 +204,38 @@ def test_absent_rf_device_does_not_claim_clean_background() -> None:
         item.event_type is NormalizedEventType.SENSOR_UNAVAILABLE
         for item in situation.recent_events
     )
+
+
+def test_repeated_unavailable_state_keeps_immutable_ids_without_flooding() -> None:
+    first_snapshot = SystemSnapshot(
+        revision=1,
+        devices=(),
+        capabilities=(),
+        incidents=(),
+        spectrum=None,
+        mode=Provenance.LIVE,
+        profile_name="test",
+        readiness_percent=0,
+        captured_at=NOW,
+    )
+    processor = UnifiedSignalProcessor()
+
+    processor.process_snapshot(first_snapshot)
+    processor.process_snapshot(
+        replace(
+            first_snapshot,
+            revision=2,
+            captured_at=NOW + timedelta(seconds=1),
+        )
+    )
+
+    unavailable = tuple(
+        event
+        for event in processor.event_bus.recent(limit=20)
+        if event.event_type is NormalizedEventType.SENSOR_UNAVAILABLE
+        and event.sources[0].sensor_id == "rf-receiver"
+    )
+    assert len(unavailable) == 1
 
 
 def test_rf_data_hold_uses_one_stable_operator_episode() -> None:

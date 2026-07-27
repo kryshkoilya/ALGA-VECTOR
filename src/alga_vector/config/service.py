@@ -197,6 +197,13 @@ def _migrate_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         migrated.setdefault("fusion", {})
         migrated["schema_version"] = 5
         version = 5
-    if version != 5:
+    if version == 5:
+        # v6 adds bounded target aggregation. Defaults only group already
+        # accepted normalized events and do not enable a new sensor or weaken
+        # the fail-closed event policy.
+        migrated.setdefault("target_tracking", {})
+        migrated["schema_version"] = 6
+        version = 6
+    if version != 6:
         raise ValueError(f"unsupported schema_version: {version!r}")
     return migrated

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from alga_vector.bootstrap import RuntimeMode, build_context
 from alga_vector.domain.errors import AppError
-from alga_vector.single_instance import SingleInstanceGuard
+from alga_vector.single_instance import SingleInstanceGuard, isolated_smoke_mutex_name
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,7 +68,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.hardware_preflight:
         return _hardware_preflight()
 
-    with SingleInstanceGuard() as instance:
+    mutex_name = ""
+    if args.headless_smoke and args.data_dir is not None:
+        mutex_name = isolated_smoke_mutex_name(args.data_dir)
+    with SingleInstanceGuard(mutex_name) as instance:
         if not instance.acquired:
             error = RuntimeError("ALGA VECTOR уже запущен для этого пользователя.")
             _report_fatal(error, headless=args.headless_smoke)

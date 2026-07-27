@@ -35,7 +35,9 @@ receive-only и объяснимый инструмент пассивного �
 
 Любой pull request обязан сохранять следующие правила:
 
-1. SIMPLE MODE читает `operator_situation`, а не raw IQ/spectrum/RSSI.
+1. SIMPLE MODE читает только интерпретированные контракты
+   `operator_situation`, `current_target`/`targets` и `sensor_readiness`, а не
+   raw IQ/spectrum/RSSI.
 2. UI не создаёт identity-решения самостоятельно.
 3. Частота, band label и RSSI не подтверждают дрон, рацию или видеоканал.
 4. `confidence` без model card и calibration report не называется

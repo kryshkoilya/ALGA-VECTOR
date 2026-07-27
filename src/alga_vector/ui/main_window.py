@@ -28,6 +28,7 @@ from .pages import (
     DevicesPage,
     DiagnosticsPage,
     DirectionPage,
+    ExpertTargetsPage,
     MapPage,
     SettingsPage,
     SignalEventsPage,
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
     EXPERT_PAGE_SPECS: tuple[tuple[str, str], ...] = (
         ("situation", "Обстановка"),
         ("dashboard", "Обзор"),
+        ("targets", "Цели"),
         ("devices", "Устройства"),
         ("spectrum", "Спектр"),
         ("events", "События"),
@@ -239,6 +241,7 @@ class MainWindow(QMainWindow):
         factories: dict[str, Callable[[object | None], QWidget]] = {
             "situation": SimpleSituationPage,
             "dashboard": DashboardPage,
+            "targets": ExpertTargetsPage,
             "devices": DevicesPage,
             "spectrum": SpectrumPage,
             "events": SignalEventsPage,

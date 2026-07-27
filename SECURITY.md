@@ -103,17 +103,19 @@ ALGA VECTOR спроектирован как локальный receive-only и
 Скачивайте ZIP и `.sha256.txt` из одного GitHub Release. Проверьте:
 
 ```powershell
-Get-FileHash .\ALGA_VECTOR-0.7.0-Windows-x64-onedir.zip -Algorithm SHA256
+Get-FileHash .\ALGA_VECTOR-1.0.0rc1-Windows-x64-onedir.zip -Algorithm SHA256
 ```
 
-Для проверенного артефакта 0.7.0 ожидается:
+Сравните результат со значением из соседнего
+`ALGA_VECTOR-1.0.0rc1-Windows-x64-onedir.zip.sha256.txt` и release notes.
+Для исторического стабильного артефакта 0.7.0 ожидается:
 
 ```text
 B40CF7C9CC6A0FBF9556888265D791DD8566C5CF4FDF7C7A7916BFA2E2A5316E
 ```
 
 SHA-256 подтверждает целостность относительно опубликованного значения, но не
-заменяет Authenticode. В отчёте сборки 0.7.0 Authenticode-подпись не заявлена.
+заменяет Authenticode. В 0.7.0 и 1.0.0rc1 Authenticode-подпись не заявлена.
 Если Windows показывает предупреждение, не обходите его автоматически:
 сначала проверьте источник, checksum и содержимое release.
 

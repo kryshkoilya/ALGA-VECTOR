@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from platformdirs import user_config_path
 
@@ -19,6 +20,19 @@ def default_mutex_name() -> str:
     )
     identity = hashlib.sha256(str(config_path).casefold().encode("utf-8")).hexdigest()[:20]
     return rf"Global\ALGA_VECTOR_{identity}"
+
+
+def isolated_smoke_mutex_name(data_dir: Path) -> str:
+    """Return a mutex scoped to one explicit headless-smoke data directory.
+
+    Production launches still use the per-user global mutex.  Build and CI
+    smokes may coexist with a running operator instance only when they use a
+    separate explicit data directory, so they cannot share journals or config.
+    """
+
+    resolved = data_dir.expanduser().resolve(strict=False)
+    identity = hashlib.sha256(str(resolved).casefold().encode("utf-8")).hexdigest()[:20]
+    return rf"Local\ALGA_VECTOR_SMOKE_{identity}"
 
 
 @dataclass(slots=True)
@@ -69,4 +83,8 @@ class SingleInstanceGuard:
         self.close()
 
 
-__all__ = ["SingleInstanceGuard", "default_mutex_name"]
+__all__ = [
+    "SingleInstanceGuard",
+    "default_mutex_name",
+    "isolated_smoke_mutex_name",
+]

@@ -53,36 +53,136 @@ function Invoke-WindowedSmoke {
     }
 }
 
+function Get-Pep440ReleaseMetadata {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PythonExecutable,
+        [Parameter(Mandatory = $true)]
+        [string]$Version
+    )
+
+    # Use the locked ``packaging`` implementation instead of maintaining a
+    # second, subtly different PEP 440 parser in PowerShell.  Release artifacts
+    # intentionally accept only canonical three-part releases and their
+    # canonical a/b/rc prereleases (for example 1.0.0rc1).
+    $MetadataScript = @'
+import json
+import sys
+
+from packaging.version import InvalidVersion, Version
+
+raw = sys.argv[1]
+try:
+    parsed = Version(raw)
+except InvalidVersion as exc:
+    raise SystemExit(f"Invalid PEP 440 release version {raw!r}: {exc}") from exc
+
+canonical = str(parsed)
+if raw != canonical:
+    raise SystemExit(
+        f"Release version must use canonical PEP 440 spelling: "
+        f"{raw!r} != {canonical!r}"
+    )
+if (
+    parsed.epoch != 0
+    or len(parsed.release) != 3
+    or parsed.post is not None
+    or parsed.dev is not None
+    or parsed.local is not None
+):
+    raise SystemExit(
+        "Release version must be X.Y.Z or X.Y.ZaN/X.Y.ZbN/X.Y.ZrcN"
+    )
+if parsed.pre is not None and parsed.pre[0] not in {"a", "b", "rc"}:
+    raise SystemExit(f"Unsupported prerelease label: {parsed.pre[0]}")
+
+pre_label, pre_number = parsed.pre or (None, None)
+print(
+    json.dumps(
+        {
+            "canonical": canonical,
+            "major": parsed.release[0],
+            "minor": parsed.release[1],
+            "patch": parsed.release[2],
+            "pre_label": pre_label,
+            "pre_number": pre_number,
+            "is_prerelease": parsed.pre is not None,
+        },
+        separators=(",", ":"),
+    )
+)
+'@
+    # Pipe the script through stdin. Windows native argument quoting can strip
+    # the quotes embedded in a multiline ``python -c`` argument.
+    $MetadataJson = (
+        $MetadataScript | & $PythonExecutable - $Version
+    ).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $MetadataJson) {
+        throw "Unable to parse release version as supported PEP 440: $Version"
+    }
+    try {
+        return $MetadataJson | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Invalid release metadata returned for version $Version."
+    }
+}
+
+function Get-ReleaseNotesCode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$VersionMetadata
+    )
+
+    $Code = (
+        "$($VersionMetadata.major)" +
+        "$($VersionMetadata.minor)" +
+        "$($VersionMetadata.patch)"
+    )
+    if ($VersionMetadata.is_prerelease) {
+        $PreLabel = ([string]$VersionMetadata.pre_label).ToUpperInvariant()
+        $Code += "$PreLabel$($VersionMetadata.pre_number)"
+    }
+    return $Code
+}
+
 function Assert-ExecutableVersion {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
         [Parameter(Mandatory = $true)]
-        [string]$ExpectedVersion
+        [string]$ExpectedVersion,
+        [Parameter(Mandatory = $true)]
+        [Version]$ExpectedFixedVersion
     )
 
-    $Parts = $ExpectedVersion.Split(".")
-    $InvalidParts = @($Parts | Where-Object { $_ -notmatch "^\d+$" })
-    if ($Parts.Count -ne 3 -or $InvalidParts.Count -gt 0) {
-        throw "Release version must contain exactly three numeric parts: $ExpectedVersion"
-    }
-    $ExpectedRaw = [Version]::new(
-        [int]$Parts[0],
-        [int]$Parts[1],
-        [int]$Parts[2],
-        0
-    )
     $VersionInfo = (Get-Item -LiteralPath $Executable).VersionInfo
-    if ($VersionInfo.FileVersionRaw -ne $ExpectedRaw) {
+    if ($VersionInfo.FileVersionRaw -ne $ExpectedFixedVersion) {
         throw (
             "Executable fixed FileVersion mismatch for $Executable. " +
-            "Expected $ExpectedRaw, received $($VersionInfo.FileVersionRaw)."
+            "Expected $ExpectedFixedVersion, " +
+            "received $($VersionInfo.FileVersionRaw)."
         )
     }
-    if ($VersionInfo.ProductVersionRaw -ne $ExpectedRaw) {
+    if ($VersionInfo.ProductVersionRaw -ne $ExpectedFixedVersion) {
         throw (
             "Executable fixed ProductVersion mismatch for $Executable. " +
-            "Expected $ExpectedRaw, received $($VersionInfo.ProductVersionRaw)."
+            "Expected $ExpectedFixedVersion, " +
+            "received $($VersionInfo.ProductVersionRaw)."
+        )
+    }
+    if ($VersionInfo.FileVersion.Trim() -cne $ExpectedVersion) {
+        throw (
+            "Executable textual FileVersion mismatch for $Executable. " +
+            "Expected '$ExpectedVersion', " +
+            "received '$($VersionInfo.FileVersion)'."
+        )
+    }
+    if ($VersionInfo.ProductVersion.Trim() -cne $ExpectedVersion) {
+        throw (
+            "Executable textual ProductVersion mismatch for $Executable. " +
+            "Expected '$ExpectedVersion', " +
+            "received '$($VersionInfo.ProductVersion)'."
         )
     }
 }
@@ -122,7 +222,17 @@ try {
             "pyproject=$ProjectVersion."
         )
     }
-    $ReleaseCode = ($ReleaseVersion.Split(".") -join "")
+    $ReleaseMetadata = Get-Pep440ReleaseMetadata `
+        -PythonExecutable $Python `
+        -Version $ReleaseVersion
+    $ExpectedFixedVersion = [Version]::new(
+        [int]$ReleaseMetadata.major,
+        [int]$ReleaseMetadata.minor,
+        [int]$ReleaseMetadata.patch,
+        0
+    )
+    $ReleaseCode = Get-ReleaseNotesCode `
+        -VersionMetadata $ReleaseMetadata
     $ReleaseNotesPath = Join-Path `
         $ProjectRoot "docs\RELEASE_${ReleaseCode}_RU.md"
     if (-not (Test-Path -LiteralPath $ReleaseNotesPath -PathType Leaf)) {
@@ -225,8 +335,14 @@ try {
     if (-not (Test-Path -LiteralPath $CliExe)) {
         throw "PyInstaller finished without the expected CLI executable: $CliExe"
     }
-    Assert-ExecutableVersion -Executable $BuiltExe -ExpectedVersion $ReleaseVersion
-    Assert-ExecutableVersion -Executable $CliExe -ExpectedVersion $ReleaseVersion
+    Assert-ExecutableVersion `
+        -Executable $BuiltExe `
+        -ExpectedVersion $ReleaseVersion `
+        -ExpectedFixedVersion $ExpectedFixedVersion
+    Assert-ExecutableVersion `
+        -Executable $CliExe `
+        -ExpectedVersion $ReleaseVersion `
+        -ExpectedFixedVersion $ExpectedFixedVersion
     Copy-Item `
         -LiteralPath (Join-Path $ProjectRoot "docs\QUICK_START_RU.txt") `
         -Destination (Join-Path $ProjectRoot "dist\ALGA VECTOR\README_FIRST_RU.txt") `

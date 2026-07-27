@@ -202,3 +202,38 @@ acquisition и не меняет пороги.
 - [`SIMPLE_EXPERT_ARCHITECTURE_RU.md`](SIMPLE_EXPERT_ARCHITECTURE_RU.md);
 - [`../VERSIONS.md`](../VERSIONS.md);
 - [`BUILD_REPORT_070_RU.md`](BUILD_REPORT_070_RU.md).
+
+## Продолжение: target-centric 1.0.0rc1
+
+Следующий запрос уточнил продуктовую цель: ALGA VECTOR должен быть не
+«инженерным интерфейсом с простым режимом», а операторской платформой с
+экспертным слоем внутри.
+
+Практическое решение:
+
+```text
+NormalizedEvent
+  ↓ policy + dedup
+FusedTarget
+  ↓ lifecycle + source attribution + recommendation
+SIMPLE MODE / EXPERT MODE
+```
+
+Введены одна текущая цель, bounded lifecycle, словесные стадии подтверждения,
+вклад источников, decay, stale/retirement и семь стабильных sensor-readiness
+ролей. SIMPLE MODE перестроен вокруг решения за 1–2 секунды; проценты,
+waterfall и техническое evidence остаются в EXPERT MODE.
+
+Отдельно зафиксирован fail-closed принцип: приложение не отображает
+невалидированный азимут, не преобразует RSSI в километры и не создаёт
+координаты или физическую идентичность из одного RF-наблюдения.
+
+Полный аудит и реализованная схема находятся в
+[`ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md),
+а состав кандидата — в
+[`RELEASE_100RC1_RU.md`](RELEASE_100RC1_RU.md).
+
+Публичной автоматически создаваемой ссылки на сам локальный Codex-диалог у
+репозитория нет. Этот файл является редактированным техническим журналом:
+он сохраняет решения и проверяемые результаты без публикации приватных
+локальных путей, координат, аппаратных идентификаторов и сырой переписки.

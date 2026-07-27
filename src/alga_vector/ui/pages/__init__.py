@@ -11,12 +11,14 @@ from .map import MapPage
 from .settings import SettingsPage
 from .simple_situation import SimpleSituationPage
 from .spectrum import SpectrumPage
+from .targets import ExpertTargetsPage
 
 __all__ = [
     "DashboardPage",
     "DevicesPage",
     "DiagnosticsPage",
     "DirectionPage",
+    "ExpertTargetsPage",
     "MapPage",
     "SettingsPage",
     "SignalEventsPage",
