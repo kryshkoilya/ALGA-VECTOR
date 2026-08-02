@@ -4,7 +4,7 @@
 исполняемые артефакты или отдельное release evidence. Он не восстанавливает
 отсутствующую историю догадками.
 
-Актуальный release candidate: **1.0.0rc1**.
+Актуальный release candidate: **1.0.0rc2**.
 Актуальная стабильная рекомендуемая версия до завершения аппаратной приёмки:
 **0.7.0**.
 
@@ -12,6 +12,7 @@
 
 | Версия | Статус | Найденный артефакт/evidence | Главное изменение |
 |---|---|---|---|
+| 1.0.0rc2 | Предварительная | Проверенный portable ZIP, checksum, release/build reports | Восстановленный live RF-тракт, capability-driven startup scan, generic fallback и полевой debug |
 | 1.0.0rc1 | Предварительная | Проверенный portable ZIP, checksum, release/build reports | Target-centric backend, новый SIMPLE MODE, sensor readiness, EXPERT «Цели» |
 | 0.2.1 | Историческая | Legacy portable ZIP, checksum и GUI/CLI с PE version `0.2.1` | Ранний запускаемый Windows-инкремент |
 | 0.3.0 | Историческая | Portable ZIP, checksum, распакованные GUI/CLI, quick start | Live по умолчанию, RTL-SDR discovery, карта/база, novice/expert |
@@ -24,6 +25,48 @@
 
 В доступном дереве **не найдено** артефакта, version metadata или release
 evidence для `0.3.1`. Поэтому такая версия не включена в список выпущенных.
+
+## 1.0.0rc2 — восстановление полевого RF-тракта
+
+Дата кандидата: 2 августа 2026 года.
+
+Главное:
+
+- аппаратный статус `STREAMING` появляется только после принятого кадра;
+- startup incident и reason code объясняют конкретный отказ открытия RTL-SDR;
+- первый Live-запуск включает bounded `field_priority`, ограниченный реальными
+  возможностями выбранного приёмника;
+- schema обновлена до `schema_version: 7`, добавлен управляемый preset
+  `detection_sensitivity`;
+- каждый energy-gate candidate синхронно попадает в Event Bus как generic
+  `RADIO_ACTIVITY_DETECTED`, даже если classifier не знает форму;
+- SIMPLE MODE больше не скрывает low-confidence generic RF-активность;
+- добавлены сквозные DEBUG-события DEVICE → CAPTURE → DETECTOR → EVENT BUS → UI;
+- RF-only наблюдение по-прежнему не считается идентификацией физического
+  объекта.
+
+Проверенный portable-артефакт:
+
+```text
+ALGA_VECTOR-1.0.0rc2-Windows-x64-onedir.zip
+```
+
+SHA-256:
+
+```text
+C4B1024D7A1AB8D2CBE590004F8C90DE0C2A4BB735360A0A3D3AC7AF73C835AE
+```
+
+Release gate: Ruff PASS, strict Mypy PASS (115 файлов), Pytest PASS
+(559 тестов), source/frozen Live/Safe/Demo smoke PASS, portable extract and
+Safe smoke PASS.
+
+Документы:
+
+- [`docs/RELEASE_100RC2_RU.md`](docs/RELEASE_100RC2_RU.md)
+- [`docs/BUILD_REPORT_100RC2_RU.md`](docs/BUILD_REPORT_100RC2_RU.md)
+- [`docs/FIELD_DEBUG_RF_PIPELINE_RU.md`](docs/FIELD_DEBUG_RF_PIPELINE_RU.md)
+- [`docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)
 
 ## 1.0.0rc1 — target-centric operator platform
 

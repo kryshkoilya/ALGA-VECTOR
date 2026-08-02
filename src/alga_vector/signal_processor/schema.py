@@ -639,6 +639,12 @@ class NormalizedEvent:
         return self.event_type.value
 
     @property
+    def trace_id(self) -> str:
+        """Stable correlation id used across bus, logs and UI diagnostics."""
+
+        return self.event_id
+
+    @property
     def operator_label(self) -> str:
         return _OPERATOR_LABELS_RU[self.event_type]
 
@@ -673,6 +679,7 @@ class NormalizedEvent:
         return {
             "schema_version": self.schema_version,
             "event_id": self.event_id,
+            "trace_id": self.trace_id,
             "event_type": self.event_type.value,
             "technical_label": self.technical_label,
             "operator_label": self.operator_label,

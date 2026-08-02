@@ -81,7 +81,7 @@ def test_runtime_produces_truthful_snapshots_and_shuts_down_cleanly(
     assert first.spectrum.source_id == "fake-tinysa-01"
     assert len(first.spectrum.power_dbm) == 64
     assert [item.state for item in first.devices] == [
-        DeviceState.READY,
+        DeviceState.STREAMING,
         DeviceState.READY,
         DeviceState.DISABLED,
     ]

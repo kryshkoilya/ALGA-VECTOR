@@ -1,5 +1,5 @@
 #define MyAppName "ALGA VECTOR"
-#define MyAppVersion "1.0.0rc1"
+#define MyAppVersion "1.0.0rc2"
 #define MyAppPublisher "Буйвол и Задира"
 #define MyAppExeName "ALGA VECTOR.exe"
 

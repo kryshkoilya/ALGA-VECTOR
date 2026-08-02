@@ -1,4 +1,4 @@
-# ALGA VECTOR 1.0.0rc1
+# ALGA VECTOR 1.0.0rc2
 
 ALGA VECTOR — русскоязычный offline-first Windows foundation гражданской
 мультисенсорной системы раннего предупреждения. В одном локальном приложении
@@ -8,7 +8,7 @@ fusion-логика.
 
 > Разработал: Буйвол и Задира
 
-![SIMPLE MODE ALGA VECTOR 1.0.0rc1](docs/screenshots/simple-mode-100rc1.png)
+![SIMPLE MODE ALGA VECTOR 1.0.0rc2](docs/screenshots/simple-mode-100rc1.png)
 
 ## GitHub-навигация
 
@@ -19,6 +19,7 @@ fusion-логика.
 - **Архитектура 1.0:** [`docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)
 - **Журнал разработки с OpenAI Codex:** [`docs/DEVELOPMENT_DIALOG_RU.md`](docs/DEVELOPMENT_DIALOG_RU.md)
 - **Быстрый старт:** [`docs/QUICK_START_RU.txt`](docs/QUICK_START_RU.txt)
+- **Полевой debug RF-тракта:** [`docs/FIELD_DEBUG_RF_PIPELINE_RU.md`](docs/FIELD_DEBUG_RF_PIPELINE_RU.md)
 - **Сторонние компоненты:** [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - **Безопасность:** [`SECURITY.md`](SECURITY.md)
 - **Участие в разработке:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
@@ -31,7 +32,7 @@ fusion-логика.
 > Публикация репозитория не отменяет лицензии сторонних компонентов и сама по
 > себе не выдаёт разрешение на повторное распространение кода продукта.
 
-Версия 1.0.0rc1 переводит запускаемый production-foundation в target-centric
+Версия 1.0.0rc2 переводит запускаемый production-foundation в target-centric
 операторскую платформу с одним backend и двумя режимами интерфейса:
 
 ```text
@@ -47,7 +48,7 @@ Demo использует детерминированные fake-источни
 реальные измерения. Structured JSONL-логи, диагностика, onboarding и Windows
 PyInstaller/Inno Setup skeleton входят в проект.
 
-Акустический модуль 1.0.0rc1 содержит PCM feature/detection core и fake-source для
+Акустический модуль 1.0.0rc2 содержит PCM feature/detection core и fake-source для
 проверяемого Demo. Bundled live-захват с микрофона и полевая модель конкретного
 физического объекта пока не поставляются. ADS-B-модуль читает локальный
 `dump1090 aircraft.json` как гражданский контекст; отсутствие борта в ADS-B не
@@ -262,12 +263,19 @@ Temporal FSM использует:
 сигнала. Периодический и voice-like класс требуют достаточной временной
 структуры; один sweep их не подтверждает.
 
-Компактное уведомление появляется только для alertable-решения в состоянии
-`confirmed` или `holding`. Оно описывает общий RF-тип: голосоподобный канал,
-пакетоподобный обмен, несущую, ограниченный узкополосный или широкополосный
-эпизод, шумоподобную помеху либо неподтверждённый источник. Формулировка
-«возможна радиостанция» не является подтверждением рации, а частота и
-RF-форма не являются идентификацией физического объекта.
+Каждое изменение, прошедшее энергетический gate, синхронно попадает в Event Bus
+как `RADIO_ACTIVITY_DETECTED`, даже если temporal FSM или классификатор ещё не
+подтвердили форму. Поэтому SIMPLE MODE показывает «Низкая уверенность:
+неподтверждённая RF-активность», а не молчит до идеального совпадения.
+Alertable-решение по-прежнему требует согласованных кадров в состоянии
+`confirmed` или `holding`. Формулировка «возможна радиостанция» не является
+подтверждением рации, а частота и RF-форма не идентифицируют физический объект.
+
+В Live-профиле с готовым физическим приёмником при первом старте автоматически
+включается компактный аппаратно-ограниченный обзор `field_priority`; последний
+явно выбранный короткий scan plan затем безопасно возобновляется. RTL-SDR
+сканирует только подтверждённые участки ниже 1,766 ГГц. Участки 2,4/5,8 ГГц не
+изображаются измеренными и включаются только для совместимого приёмника.
 
 ## Направление: fail-closed
 
@@ -284,7 +292,7 @@ RF-форма не являются идентификацией физичес�
 Если валидного источника нет, данные устарели, калибровка не совпадает или
 evidence недостаточно, луч скрывается и отображается
 **«Направление недоступно»**. Bundled adapter конкретного внешнего DF-сенсора в
-1.0.0rc1 не поставляется; реализованы модель, policy gate и runtime ingestion API.
+1.0.0rc2 не поставляется; реализованы модель, policy gate и runtime ingestion API.
 
 RF-эпизод сам по себе не создаёт bearing.
 
@@ -319,7 +327,7 @@ Demo при обычном запуске.
 
 ## Конфигурация и совместимость
 
-ALGA VECTOR 1.0.0rc1 использует `schema_version: 6`. Старые профили проходят
+Текущая ветка использует `schema_version: 7`. Старые профили проходят
 последовательную миграцию и strict validation. Новые acoustic, airspace и
 fusion-поля имеют fail-closed defaults: live-источник не открывается без явной
 настройки.
@@ -332,13 +340,15 @@ fusion-поля имеют fail-closed defaults: live-источник не от
 - `tinysa_model`;
 - явный `tinysa_ultra_mode`;
 - проверку всего частотного окна, а не только central frequency;
+- явный полевой preset `spectrum.detection_sensitivity` (`low`, `balanced`,
+  `high`) без изменения семантики классификации;
 - acoustic input mode и локальный путь гражданского ADS-B-контекста;
 - параметры temporal fusion;
 - bounded-параметры target aggregation, dedup, decay, stale и retirement;
 - live/demo/safe provenance;
 - atomic user config и last-known-good fallback.
 
-Поля `map` и `location` остаются в schema v6. Карта доступна только в
+Поля `map` и `location` остаются в schema v7. Карта доступна только в
 EXPERT MODE и сохраняет прежние fail-closed ограничения: локальная база,
 картографические измерения и ручная геометрия не становятся координатами
 RF-источника. SIMPLE MODE эти технические настройки не показывает.
@@ -384,6 +394,9 @@ capture, не меняет частоту и не открывает произ�
 
 # Повторить onboarding
 .\.venv\Scripts\python.exe -m alga_vector --onboarding
+
+# Одноразовый подробный журнал DEVICE → CAPTURE → DETECTOR → EVENT BUS → UI
+.\.venv\Scripts\python.exe -m alga_vector --live --debug
 ```
 
 Для отдельного каталога данных добавьте:
@@ -441,7 +454,7 @@ dist\ALGA VECTOR\README_FIRST_RU.txt
 - без автоматической отправки;
 - без raw IQ, spectrum arrays и legacy coordinate data в support bundle.
 
-## Что не заявляется в 1.0.0rc1
+## Что не заявляется в 1.0.0rc2
 
 - физическая сертификация HackRF, PortaPack, tinySA или RTL-SDR на этом build;
 - bundled live-захват с микрофона и полевая валидация акустической модели;
@@ -463,6 +476,9 @@ dist\ALGA VECTOR\README_FIRST_RU.txt
 ## Документация
 
 - [`docs/QUICK_START_RU.txt`](docs/QUICK_START_RU.txt)
+- [`docs/RELEASE_100RC2_RU.md`](docs/RELEASE_100RC2_RU.md)
+- [`docs/BUILD_REPORT_100RC2_RU.md`](docs/BUILD_REPORT_100RC2_RU.md)
+- [`docs/FIELD_DEBUG_RF_PIPELINE_RU.md`](docs/FIELD_DEBUG_RF_PIPELINE_RU.md)
 - [`docs/RELEASE_100RC1_RU.md`](docs/RELEASE_100RC1_RU.md)
 - [`docs/BUILD_REPORT_100RC1_RU.md`](docs/BUILD_REPORT_100RC1_RU.md)
 - [`docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)

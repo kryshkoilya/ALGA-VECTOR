@@ -1,9 +1,9 @@
 # ALGA VECTOR 1.0 — продуктовая архитектура операторской платформы
 
-Статус документа: as-built описание текущего инкремента `1.0.0rc1` поверх
+Статус документа: as-built описание текущего инкремента `1.0.0rc2` поверх
 стабильной версии `0.7.0`.
 
-Дата среза: 27 июля 2026 года.
+Дата среза: 2 августа 2026 года.
 
 Подпись продукта: **«Разработал: Буйвол и Задира»**.
 
@@ -124,7 +124,7 @@ headline. Это хорошо для «что произошло сейчас»,
 - target card и compact sector в SIMPLE MODE;
 - отдельная страница «Цели» в EXPERT MODE;
 - поля `targets`, `current_target`, `sensor_readiness` в `SystemSnapshot`;
-- `schema_version: 6`.
+- `schema_version: 7`.
 
 При этом архитектура остаётся переходной в одном месте:
 
@@ -200,7 +200,7 @@ UI получает только snapshot. Он не обращается к SDR
 | `SENSOR_UNAVAILABLE` | потеря или ограничение наблюдения |
 
 Схема события имеет собственную версию `"1.0"`. Она не связана с
-`AppConfig.schema_version: 6`.
+`AppConfig.schema_version: 7`.
 
 Каждое событие содержит:
 
@@ -1007,7 +1007,7 @@ policy и target aggregation.
 Добавленная секция:
 
 ```yaml
-schema_version: 6
+schema_version: 7
 target_tracking:
   correlation_window_seconds: 12.0
   deduplication_window_seconds: 4.0
@@ -1262,10 +1262,10 @@ python -m pytest -p no:cacheprovider `
   tests/test_signal_processor_interpretation.py
 ```
 
-Фактический локальный gate `1.0.0rc1`: Ruff PASS, strict Mypy PASS по
-114 source-файлам, pytest PASS — 534 теста, source/frozen/portable smoke PASS.
+Фактический локальный gate `1.0.0rc2`: Ruff PASS, strict Mypy PASS по
+115 source-файлам, pytest PASS — 559 тестов, source/frozen/portable smoke PASS.
 Артефакт, SHA-256 и среда зафиксированы в
-[`BUILD_REPORT_100RC1_RU.md`](BUILD_REPORT_100RC1_RU.md).
+[`BUILD_REPORT_100RC2_RU.md`](BUILD_REPORT_100RC2_RU.md).
 
 ## QA.3. Обязательная ручная UI-приёмка
 
@@ -1360,7 +1360,7 @@ python -m pytest -p no:cacheprovider `
 
 ## H.5. Итог
 
-Текущий `1.0.0rc1` — не косметический redesign 0.7.0. В нём действительно
+Текущий `1.0.0rc2` — не косметический redesign 0.7.0. В нём действительно
 появилась target-centric программная модель, отдельный lifecycle, bounded
 correlation, readiness и два уровня представления.
 

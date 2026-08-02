@@ -157,6 +157,66 @@ def test_simple_mode_prefers_future_current_target_and_verbal_stage(
 
 
 @pytest.mark.ui
+def test_simple_mode_keeps_low_confidence_rf_activity_visible(
+    qt_app: QApplication,
+) -> None:
+    event = SimpleNamespace(
+        event_id="rf-low-1",
+        event_type="RADIO_ACTIVITY_DETECTED",
+        operator_label="Обнаружена RF-активность в наблюдаемом окне",
+        operator_explanation=(
+            "Энергетический всплеск повторился, но тип физического источника "
+            "не подтверждён."
+        ),
+        severity="info",
+        important=False,
+        observed_at=NOW - timedelta(seconds=1),
+    )
+    situation = SimpleNamespace(
+        mode="activity",
+        headline_ru="Обнаружена RF-активность",
+        explanation_ru=(
+            "Низкая уверенность: это неподтверждённый RF-источник, а не "
+            "идентифицированный БПЛА."
+        ),
+        primary_event=event,
+        recent_events=(event,),
+        recommendation=SimpleNamespace(
+            recommended_action_short="Продолжайте наблюдение.",
+            recommended_action_detailed="Дождитесь повторения или второго сенсора.",
+        ),
+    )
+    snapshot = SimpleNamespace(
+        mode="live",
+        runtime_mode="live",
+        captured_at=NOW,
+        operator_situation=situation,
+        current_target=None,
+        targets=(),
+        sensor_readiness=None,
+    )
+    page = SimpleSituationPage()
+
+    page.refresh(snapshot)
+    qt_app.processEvents()
+
+    assert page.mode_label.text() == "АКТИВНОСТЬ"
+    assert page.headline.text() == "Обнаружена RF-активность"
+    assert "Низкая уверенность" in page.explanation.text()
+    assert page.target_card.type_label.text() == "Неподтверждённый RF-источник"
+    assert page.target_card.stage_badge.text() == "ПОДОЗРИТЕЛЬНАЯ АКТИВНОСТЬ"
+    assert page.events_list.count() == 1
+    assert "RF-активность" in page.events_list.item(0).text()
+    visible = " ".join(
+        label.text()
+        for label in page.findChildren(QLabel)
+        if label.isVisible()
+    ).lower()
+    assert "точно бпла" not in visible
+    page.close()
+
+
+@pytest.mark.ui
 def test_simple_mode_never_renders_unvalidated_range_or_position(
     qt_app: QApplication,
 ) -> None:

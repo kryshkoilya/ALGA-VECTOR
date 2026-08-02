@@ -283,7 +283,9 @@ class DevicesPage(OperatorPage):
             ("tuning_profile", "RF-профиль"),
             ("tuning_range", "Диапазон перестройки"),
             ("sample_rate", "Частота дискретизации"),
+            ("gain", "Усиление приёмника"),
             ("frequency", "Центральная частота"),
+            ("last_data", "Последние данные"),
             ("sync", "Синхронизация"),
             ("temperature", "Температура"),
             ("reason", "Причина"),
@@ -958,7 +960,9 @@ class DevicesPage(OperatorPage):
                 if isinstance(sample_rate, (int, float))
                 else "—"
             ),
+            "gain": _device_gain_text(device, metrics),
             "frequency": format_frequency(attr(device, "center_frequency_hz")),
+            "last_data": _last_data_text(attr(device, "last_data_at")),
             "sync": sync,
             "temperature": f"{temperature} °C" if temperature != "—" else "—",
             "reason": attr(device, "reason_ru", "Нет активной причины"),
@@ -1036,6 +1040,34 @@ class DevicesPage(OperatorPage):
         ok, result = call_runtime(self.runtime, "disconnect", device_id)
         self.action_result.setText("Устройство отключено" if ok else str(result))
         self.refresh()
+
+
+def _device_gain_text(device: object, metrics: object) -> str:
+    kind = value_of(attr(device, "kind")).lower()
+    if kind == "hackrf":
+        lna = attr(metrics, "lna_gain_db")
+        vga = attr(metrics, "vga_gain_db")
+        if isinstance(lna, (int, float)) and isinstance(vga, (int, float)):
+            return f"LNA {lna:g} dB · VGA {vga:g} dB · RF amp выключен"
+    mode = value_of(attr(metrics, "gain_mode")).lower()
+    applied = value_of(attr(metrics, "applied_gain")).lower()
+    if mode == "auto":
+        return (
+            "AUTO · ожидает первый живой capture"
+            if applied in {"", "pending_first_capture"}
+            else f"AUTO · применено: {applied}"
+        )
+    gain = attr(metrics, "gain_db", attr(metrics, "gain"))
+    if isinstance(gain, (int, float)):
+        return f"{gain:g} dB"
+    return "Не сообщено адаптером"
+
+
+def _last_data_text(value: object) -> str:
+    if hasattr(value, "strftime"):
+        return str(value.strftime("%Y-%m-%d %H:%M:%S %Z")).strip()
+    rendered = str(value).strip() if value is not None else ""
+    return rendered or "Кадры ещё не подтверждены"
 
 
 def _tuning_profile_label(profile_id: str) -> str:

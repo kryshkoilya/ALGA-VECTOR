@@ -6,6 +6,7 @@ from datetime import datetime
 from threading import RLock
 
 from alga_vector.domain.models import SystemSnapshot
+from alga_vector.signal_analysis import RfDecision
 from alga_vector.targets import (
     FusedTarget,
     SensorReadinessInterpreter,
@@ -98,6 +99,25 @@ class UnifiedSignalProcessor:
         self._ingest_target_event(enriched, evaluated_at=enriched.received_at)
         publication = self.event_bus.publish(enriched)
         return publication
+
+    def ingest_rf_decision(
+        self,
+        decision: RfDecision,
+        *,
+        received_at: datetime,
+    ) -> tuple[NormalizedEvent, PublishResult]:
+        """Normalize and publish one acquisition-time RF observation.
+
+        This path is intentionally synchronous.  It persists a short generic
+        RF anomaly in the bounded event bus even when the following hardware
+        frame returns to background before the UI requests a snapshot.
+        """
+
+        event = self._normalizer.normalize_rf_decision(
+            decision,
+            now=received_at,
+        )
+        return event, self.ingest(event)
 
     def process_snapshot(
         self,

@@ -55,7 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
             "receive-only приёмники"
         ),
     )
-    parser.add_argument("--debug", action="store_true", help="вывести traceback при сбое")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="включить подробный pipeline-лог и вывести traceback при сбое",
+    )
     return parser
 
 
@@ -89,6 +93,7 @@ def _run(args: argparse.Namespace) -> int:
             # Smoke/build verification must be deterministic and must never
             # contact the online tile provider.
             network_maps_override=False if args.headless_smoke else None,
+            debug_logging_override=args.debug,
         )
         if context.warning is not None and sys.stderr is not None:
             print(str(context.warning), file=sys.stderr)

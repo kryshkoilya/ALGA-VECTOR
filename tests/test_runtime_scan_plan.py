@@ -21,6 +21,7 @@ from alga_vector.devices import (
     CompiledScanPlan,
     DeviceAdapter,
     DeviceManager,
+    FakeRTLSDRAdapter,
     FakeTinySAAdapter,
     ScanPlanRequest,
     ScanRange,
@@ -356,6 +357,31 @@ def _hackrf_config(tmp_path: Path, *, sample_rate_hz: int) -> AppConfig:
     )
 
 
+def _rtlsdr_config(tmp_path: Path) -> AppConfig:
+    return AppConfig(
+        mode="live",
+        first_run_complete=True,
+        storage=StorageConfig(data_dir=tmp_path / "rtlsdr-field"),
+        spectrum=SpectrumConfig(
+            center_frequency_hz=433_920_000,
+            span_hz=2_000_000,
+            sample_rate_hz=2_400_000,
+        ),
+        devices=DevicesConfig(
+            enable_real_adapters=True,
+            adapters=[
+                AdapterConfig(
+                    id="test-rtlsdr",
+                    kind="rtlsdr",
+                    enabled=True,
+                    connection="RTLSDR:0",
+                    rtlsdr_profile="generic",
+                )
+            ],
+        ),
+    )
+
+
 def _tinysa_adapter() -> FakeTinySAAdapter:
     return FakeTinySAAdapter(
         "test-tinysa",
@@ -623,6 +649,125 @@ def test_runtime_wide_and_full_plans_fit_hackrf_at_20_mhz(
     full = runtime.start_scan_plan("full_supported")
     assert full.coverage_fraction == pytest.approx(1.0)
     assert full.window_count < 1_024
+    runtime.shutdown()
+
+
+def test_first_live_start_uses_capability_clipped_field_priority_on_rtlsdr(
+    tmp_path: Path,
+) -> None:
+    config = _rtlsdr_config(tmp_path)
+    adapter = FakeRTLSDRAdapter(
+        "test-rtlsdr",
+        connection="RTLSDR:0",
+        clock=lambda: START,
+    )
+    runtime = ApplicationRuntime(
+        config,
+        device_manager=RecordingDeviceManager(adapter),
+        background_acquisition=False,
+        clock=lambda: START,
+    )
+
+    runtime.start()
+    status = runtime.scan_plan_status()
+    session = runtime._rf_scan_session
+
+    assert status is not None
+    assert status.plan_id == "preset_field_priority"
+    assert status.window_count <= 128
+    assert status.estimated_cycle_ms <= 120_000
+    assert session is not None
+    assert all(
+        window.stop_frequency_hz <= 1_766_000_000
+        for window in session.plan.windows
+    )
+    assert {item.requested.range_id for item in session.plan.excluded_ranges} == {
+        "field_2400",
+        "field_5800",
+    }
+    runtime.shutdown()
+
+
+def test_first_live_start_includes_high_field_ranges_on_hackrf(
+    tmp_path: Path,
+) -> None:
+    config = _hackrf_config(tmp_path, sample_rate_hz=2_000_000)
+    runtime = ApplicationRuntime(
+        config,
+        device_manager=RecordingDeviceManager(TestHackRfAdapter()),
+        background_acquisition=False,
+        clock=lambda: START,
+    )
+
+    runtime.start()
+    status = runtime.scan_plan_status()
+    session = runtime._rf_scan_session
+
+    assert status is not None
+    assert status.plan_id == "preset_field_priority"
+    assert status.window_count <= 128
+    assert status.estimated_cycle_ms <= 120_000
+    assert session is not None
+    assert not session.plan.excluded_ranges
+    covered_ids = {item.range_id for item in session.plan.covered_ranges}
+    assert {"field_2400", "field_5800"}.issubset(covered_ids)
+    assert any(
+        window.center_frequency_hz >= 5_725_000_000
+        for window in session.plan.windows
+    )
+    runtime.shutdown()
+
+
+def test_live_start_resumes_only_last_explicit_bounded_scan_plan(
+    tmp_path: Path,
+) -> None:
+    config = _hackrf_config(tmp_path, sample_rate_hz=20_000_000)
+    first = ApplicationRuntime(
+        config,
+        device_manager=RecordingDeviceManager(TestHackRfAdapter()),
+        background_acquisition=False,
+        clock=lambda: START,
+    )
+    started = first.start_scan_plan("general_vhf")
+    resume_path = config.storage.data_dir / "state" / "active-scan-preset.txt"
+
+    assert started.window_count <= 128
+    assert resume_path.read_text(encoding="utf-8").strip() == "general_vhf"
+    first.shutdown()
+
+    second = ApplicationRuntime(
+        config,
+        device_manager=RecordingDeviceManager(TestHackRfAdapter()),
+        background_acquisition=False,
+        clock=lambda: START,
+    )
+    second.start()
+    resumed = second.scan_plan_status()
+
+    assert resumed is not None
+    assert resumed.plan_id == "preset_general_vhf"
+    assert resumed.profile_id == "hackrf_one_rx"
+    second.stop_scan_plan()
+    assert not resume_path.exists()
+    second.shutdown()
+
+
+def test_very_wide_scan_is_never_persisted_for_startup_resume(
+    tmp_path: Path,
+) -> None:
+    config = _hackrf_config(tmp_path, sample_rate_hz=2_400_000)
+    runtime = ApplicationRuntime(
+        config,
+        device_manager=RecordingDeviceManager(TestHackRfAdapter()),
+        background_acquisition=False,
+        clock=lambda: START,
+    )
+
+    started = runtime.start_scan_plan("general_s_band")
+    resume_path = config.storage.data_dir / "state" / "active-scan-preset.txt"
+
+    assert started.window_count > 128
+    assert not resume_path.exists()
     runtime.shutdown()
 
 

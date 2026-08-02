@@ -56,6 +56,8 @@ _MODE_ALIASES = {
     "background_only": "background",
     "active": "activity",
     "radio_activity_detected": "activity",
+    "unknown_anomaly": "activity",
+    "suspicious_rf_activity": "activity",
     "likely_handheld_radio": "activity",
     "likely_video_link": "activity",
     "likely_drone_signature": "activity",
@@ -90,6 +92,8 @@ _STAGE_ALIASES = {
 _EVENT_TITLES = {
     "noise_background": "Обычный фон",
     "radio_activity_detected": "Обнаружена RF-активность",
+    "unknown_anomaly": "Неподтверждённая RF-аномалия",
+    "suspicious_rf_activity": "Подозрительная RF-активность",
     "likely_handheld_radio": "Вероятная портативная радиосвязь",
     "likely_video_link": "Вероятный видеоканал",
     "likely_drone_signature": "Сигнатура требует проверки",
@@ -104,6 +108,8 @@ _EVENT_TITLES = {
 _TYPE_LABELS = {
     "noise_background": "Фоновая активность",
     "radio_activity_detected": "Неподтверждённый RF-источник",
+    "unknown_anomaly": "Неподтверждённый RF-источник",
+    "suspicious_rf_activity": "Неподтверждённый RF-источник",
     "likely_handheld_radio": "Вероятная портативная радиосвязь",
     "likely_video_link": "Вероятный видеоканал",
     "likely_drone_signature": "Вероятная воздушная цель",
@@ -114,6 +120,9 @@ _TYPE_LABELS = {
 }
 
 _IMPORTANT_EVENT_TYPES = {
+    "radio_activity_detected",
+    "unknown_anomaly",
+    "suspicious_rf_activity",
     "likely_video_link",
     "likely_drone_signature",
     "acoustic_anomaly",
@@ -992,6 +1001,12 @@ def _confirmation_stage(
     if event_type == "direction_estimated":
         return "background"
     if event_type in {
+        "radio_activity_detected",
+        "unknown_anomaly",
+        "suspicious_rf_activity",
+    }:
+        return "suspicious_activity"
+    if event_type in {
         "likely_video_link",
         "likely_handheld_radio",
         "multisensor_correlated",
@@ -1492,11 +1507,10 @@ def _event_view(event: object) -> _EventView:
     explicit_important = _optional_bool(
         _first_value(event, ("important", "is_important"))
     )
-    important = (
+    important = event_type in _IMPORTANT_EVENT_TYPES or (
         explicit_important
         if explicit_important is not None
         else severity in {"critical", "warning"}
-        or event_type in _IMPORTANT_EVENT_TYPES
     )
     return _EventView(
         title=title,

@@ -29,6 +29,7 @@ from alga_vector.devices import (
     GENERIC_RTLSDR_PROFILE,
     HACKRF_ONE_PROFILE,
     CaptureTopology,
+    CompiledScanPlan,
     DeviceManagerLike,
     HackRfDiscoveryResult,
     HackRfDiscoveryService,
@@ -98,6 +99,7 @@ from alga_vector.maps import (
 )
 from alga_vector.observability import HealthAggregator, JsonlRotatingLogger
 from alga_vector.signal_analysis import (
+    DecisionLifecycle,
     DecisionTransition,
     FrameValidationError,
     QualityFlag,
@@ -108,6 +110,7 @@ from alga_vector.signal_analysis import (
     SourceObservationMetadata,
     SpectrumAcquisitionMode,
     assessment_with_data_age,
+    configs_for_detection_sensitivity,
     data_unreliable_assessment,
     no_data_assessment,
 )
@@ -149,6 +152,10 @@ _DEFAULT_ACQUISITION_STALE_SECONDS = 5.0
 _ACQUISITION_JOIN_TIMEOUT_SECONDS = 1.0
 _SCAN_MAXIMUM_WINDOWS = 1_024
 _SCAN_DETECTOR_HISTORY_FRAMES = 16
+_ACQUISITION_TRACE_INTERVAL_SECONDS = 1.0
+_AUTO_RESUME_MAX_WINDOWS = 128
+_AUTO_RESUME_MAX_CYCLE_MS = 120_000
+_FIELD_PRIORITY_PRESET_ID = "field_priority"
 _RTLSDR_CONNECTION_RE = re.compile(r"(?i)^RTLSDR:(\d{1,3})$")
 _HACKRF_CONNECTION_RE = re.compile(r"(?i)^HACKRF:[0-9a-f]{8,64}$")
 _COM_CONNECTION_RE = re.compile(r"(?i)^COM(?:[1-9]|[1-9]\d|[12]\d\d)$")
@@ -211,8 +218,11 @@ class ApplicationRuntime:
         self._spectrum_failure_active = False
         self._spectrum_failure_episode = 0
         self._capture_fault: tuple[str, str] | None = None
-        self._signal_detector = RfEventDetector()
-        self._signal_decision_engine = RfDecisionEngine()
+        sensitivity = configs_for_detection_sensitivity(
+            config.spectrum.detection_sensitivity
+        )
+        self._signal_detector = RfEventDetector(sensitivity.detector)
+        self._signal_decision_engine = RfDecisionEngine(sensitivity.temporal)
         self._signal_events: deque[RfDecision] = deque(maxlen=64)
         self._signal_decision: RfDecision | None = None
         self._signal_source_id: str | None = None
@@ -223,6 +233,9 @@ class ApplicationRuntime:
         self._fixed_tuning_warmup_pending = False
         self._acquisition_transition_pending = False
         self._rf_scan_forced_background = False
+        self._scan_resume_path = (
+            config.storage.data_dir / "state" / "active-scan-preset.txt"
+        )
         self._multisensor = MultiSensorCoordinator(config, clock=clock)
         if signal_processor is None:
             tracking = config.target_tracking
@@ -277,6 +290,16 @@ class ApplicationRuntime:
         self._acquisition_latest_frame: SpectrumFrame | None = None
         self._acquisition_latest_monotonic: float | None = None
         self._acquisition_failure: tuple[str, str] | None = None
+        self._acquisition_requests_submitted = 0
+        self._acquisition_frames_received = 0
+        self._acquisition_frames_consumed = 0
+        self._acquisition_failure_attempts = 0
+        self._last_request_trace_monotonic = 0.0
+        self._last_frame_trace_monotonic = 0.0
+        self._last_requested_center_frequency_hz = (
+            config.spectrum.center_frequency_hz
+        )
+        self._last_requested_span_hz = config.spectrum.span_hz
         self._last_consumed_frame_key: tuple[str, int, datetime] | None = None
         self._direction_service = direction_service or DirectionService(
             demo_mode=config.mode == "demo",
@@ -421,26 +444,39 @@ class ApplicationRuntime:
                 if is_iq
                 else self.config.spectrum.span_hz
             )
-            request_kwargs = {
-                "window_span_hz": window_span_hz,
-                "dwell_time_ms": max(
-                    50,
-                    round(self._acquisition_period_seconds * 1_000),
-                ),
-                "dwell_frames": 12,
-                "retune_settle_ms": 35,
-                "maximum_windows": _SCAN_MAXIMUM_WINDOWS,
-            }
+            dwell_time_ms = max(
+                50,
+                round(self._acquisition_period_seconds * 1_000),
+            )
+            overlap_fraction = 0.10
+            maximum_windows = _SCAN_MAXIMUM_WINDOWS
+            if preset_id == _FIELD_PRIORITY_PRESET_ID:
+                # Startup coverage must remain a compact recurring cycle even
+                # at the minimum supported HackRF sample rate.  Adjacent
+                # windows meet without overlap; unsupported ranges are still
+                # removed by the capability compiler below.
+                overlap_fraction = 0.0
+                maximum_windows = _AUTO_RESUME_MAX_WINDOWS
             if preset_id == "full_supported":
                 request = full_supported_scan_request(
                     profile,
-                    **request_kwargs,
+                    window_span_hz=window_span_hz,
+                    overlap_fraction=overlap_fraction,
+                    dwell_time_ms=dwell_time_ms,
+                    dwell_frames=12,
+                    retune_settle_ms=35,
+                    maximum_windows=maximum_windows,
                 )
             else:
                 try:
                     request = scan_request_from_preset(
                         preset_id,
-                        **request_kwargs,
+                        window_span_hz=window_span_hz,
+                        overlap_fraction=overlap_fraction,
+                        dwell_time_ms=dwell_time_ms,
+                        dwell_frames=12,
+                        retune_settle_ms=35,
+                        maximum_windows=maximum_windows,
                     )
                 except ValueError as exc:
                     raise AppError(
@@ -570,6 +606,7 @@ class ApplicationRuntime:
                     limitation.code for limitation in plan.limitations
                 ],
             )
+            self._remember_bounded_scan_plan(preset_id, plan)
             self._start_acquisition_if_enabled()
             return self.scan_plan_status() or self._scan_status_unavailable()
 
@@ -629,6 +666,7 @@ class ApplicationRuntime:
                 )
             )
             self._rf_scan_forced_background = False
+            self._forget_scan_plan_resume()
             self._latest = None
             if had_session:
                 self._log(
@@ -646,6 +684,217 @@ class ApplicationRuntime:
     def _scan_status_unavailable() -> ScanRuntimeStatus:
         raise RuntimeError("scan plan status was not published")
 
+    def _remember_bounded_scan_plan(
+        self,
+        preset_id: str,
+        plan: CompiledScanPlan,
+    ) -> None:
+        """Persist only a short, hardware-compiled plan for the next launch."""
+
+        windows = plan.windows
+        estimated_cycle_ms = plan.estimated_cycle_ms
+        if (
+            not windows
+            or len(windows) > _AUTO_RESUME_MAX_WINDOWS
+            or estimated_cycle_ms > _AUTO_RESUME_MAX_CYCLE_MS
+        ):
+            self._forget_scan_plan_resume()
+            self._log(
+                "scan_plan.resume_not_saved",
+                "План не будет запускаться автоматически: цикл слишком широк для безопасного auto-resume.",
+                preset_id=preset_id,
+                windows=len(windows),
+                estimated_cycle_ms=estimated_cycle_ms,
+                maximum_resume_windows=_AUTO_RESUME_MAX_WINDOWS,
+                maximum_resume_cycle_ms=_AUTO_RESUME_MAX_CYCLE_MS,
+            )
+            return
+        path = self._scan_resume_path
+        temporary = path.with_suffix(".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(preset_id + "\n", encoding="utf-8")
+            os.replace(temporary, path)
+        except OSError as exc:
+            with suppress(OSError):
+                temporary.unlink()
+            self._log(
+                "scan_plan.resume_save_failed",
+                "Не удалось сохранить безопасный auto-resume плана.",
+                level=logging.WARNING,
+                error_type=type(exc).__name__,
+            )
+
+    def _forget_scan_plan_resume(self) -> None:
+        with suppress(OSError):
+            self._scan_resume_path.unlink()
+        with suppress(OSError):
+            self._scan_resume_path.with_suffix(".tmp").unlink()
+
+    def _resume_bounded_scan_plan(self) -> bool:
+        """Resume the last explicit compact plan after capability validation."""
+
+        if self.config.mode != "live" or not has_enabled_real_hardware(self.config):
+            return False
+        try:
+            preset_id = self._scan_resume_path.read_text(
+                encoding="utf-8"
+            ).strip()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            self._log(
+                "scan_plan.resume_read_failed",
+                "Не удалось прочитать сохранённый auto-resume плана.",
+                level=logging.WARNING,
+                error_type=type(exc).__name__,
+            )
+            return False
+        allowed = {item.preset_id for item in GENERAL_SCAN_PRESETS} | {
+            "full_supported"
+        }
+        if preset_id not in allowed:
+            self._forget_scan_plan_resume()
+            self._log(
+                "scan_plan.resume_invalid",
+                "Сохранённый идентификатор плана отклонён.",
+                level=logging.WARNING,
+            )
+            return False
+        try:
+            status = self.start_scan_plan(preset_id)
+        except (AppError, OSError, RuntimeError, ValueError) as exc:
+            self._log(
+                "scan_plan.resume_unavailable",
+                "Auto-resume не запущен: текущее оборудование не подтвердило сохранённый план.",
+                level=logging.WARNING,
+                preset_id=preset_id,
+                code=(
+                    exc.code
+                    if isinstance(exc, AppError)
+                    else "SCAN_PLAN.RESUME_FAILED"
+                ),
+                error_type=type(exc).__name__,
+            )
+            return False
+        if (
+            status.window_count > _AUTO_RESUME_MAX_WINDOWS
+            or status.estimated_cycle_ms > _AUTO_RESUME_MAX_CYCLE_MS
+        ):
+            # Defensive guard for a future compiler change.  The persisted
+            # request must never silently expand into a very long field cycle.
+            self.stop_scan_plan()
+            self._log(
+                "scan_plan.resume_expanded",
+                "Auto-resume остановлен: новый аппаратный план вышел за безопасный предел.",
+                level=logging.WARNING,
+                preset_id=preset_id,
+                windows=status.window_count,
+                estimated_cycle_ms=status.estimated_cycle_ms,
+            )
+            return False
+        self._log(
+            "scan_plan.resumed",
+            "Возобновлён последний явно выбранный компактный план обзора.",
+            preset_id=preset_id,
+            source_id=status.source_id,
+            windows=status.window_count,
+            estimated_cycle_ms=status.estimated_cycle_ms,
+        )
+        return True
+
+    def _start_default_field_priority_scan(self) -> bool:
+        """Start truthful compact coverage when live hardware has no resume state."""
+
+        if self.config.mode != "live" or not has_enabled_real_hardware(self.config):
+            return False
+        try:
+            status = self.start_scan_plan(_FIELD_PRIORITY_PRESET_ID)
+        except (AppError, OSError, RuntimeError, ValueError) as exc:
+            if isinstance(exc, AppError):
+                fault = (exc.code, exc.message_ru)
+                if fault not in self._startup_faults:
+                    self._startup_faults.append(fault)
+            self._log(
+                "scan_plan.field_priority_unavailable",
+                "Полевой RF-обзор не запущен; система не будет сообщать о неизмеренных частотах.",
+                level=logging.WARNING,
+                preset_id=_FIELD_PRIORITY_PRESET_ID,
+                code=(
+                    exc.code
+                    if isinstance(exc, AppError)
+                    else "SCAN_PLAN.FIELD_PRIORITY_FAILED"
+                ),
+                error_type=type(exc).__name__,
+            )
+            return False
+        if (
+            status.window_count > _AUTO_RESUME_MAX_WINDOWS
+            or status.estimated_cycle_ms > _AUTO_RESUME_MAX_CYCLE_MS
+        ):
+            self.stop_scan_plan()
+            self._log(
+                "scan_plan.field_priority_too_wide",
+                "Полевой RF-обзор остановлен: цикл выше безопасного лимита.",
+                level=logging.WARNING,
+                windows=status.window_count,
+                estimated_cycle_ms=status.estimated_cycle_ms,
+            )
+            return False
+        self._log(
+            "scan_plan.field_priority_started",
+            "Запущен компактный обзор общей RF-активности в пределах возможностей приёмника.",
+            source_id=status.source_id,
+            profile_id=status.profile_id,
+            windows=status.window_count,
+            estimated_cycle_ms=status.estimated_cycle_ms,
+            coverage_fraction=status.coverage_fraction,
+        )
+        return True
+
+    def _publish_startup_receiver_failures(
+        self,
+        snapshots: tuple[DeviceSnapshot, ...],
+    ) -> None:
+        """Expose sanitized hardware-open failures before acquisition starts."""
+
+        for snapshot in snapshots:
+            if snapshot.state != DeviceState.FAILED or snapshot.kind not in {
+                "hackrf",
+                "rtlsdr",
+                "tinysa",
+            }:
+                continue
+            code = snapshot.reason_code or "DEVICE.RECEIVER_UNAVAILABLE"
+            reason = snapshot.reason_ru or "Приёмник недоступен."
+            fault = (code, reason)
+            if fault not in self._startup_faults:
+                self._startup_faults.append(fault)
+            context = {
+                key: value
+                for key in (
+                    "descriptor_count",
+                    "device_index",
+                    "error_type",
+                    "failure_class",
+                    "os_error_code",
+                )
+                if isinstance(
+                    (value := snapshot.metrics.get(key)),
+                    (float, int, str),
+                )
+                and not isinstance(value, bool)
+            }
+            self._log(
+                "device.receiver_unavailable",
+                "Реальный RF-приёмник не открыт; живые сэмплы от него не поступают.",
+                level=logging.WARNING,
+                code=code,
+                source_id=snapshot.device_id,
+                receiver_kind=snapshot.kind,
+                **context,
+            )
+
     def start(self) -> None:
         with self._lock:
             if self._state == RuntimeState.CLOSED:
@@ -659,9 +908,14 @@ class ApplicationRuntime:
                     operator_action_ru="Дождитесь завершения и запустите приложение повторно.",
                 )
             with self._device_lock:
-                self._device_manager.refresh()
+                startup_devices = self._device_manager.refresh()
+            self._publish_startup_receiver_failures(startup_devices)
             self._state = RuntimeState.RUNNING
-            self._start_acquisition_if_enabled()
+            if (
+                not self._resume_bounded_scan_plan()
+                and not self._start_default_field_priority_scan()
+            ):
+                self._start_acquisition_if_enabled()
             if self.config.location.source == "gps":
                 try:
                     self.start_gps()
@@ -722,6 +976,14 @@ class ApplicationRuntime:
         self._acquisition_stop_event = stop_event
         self._acquisition_thread = thread
         thread.start()
+        self._log(
+            "acquisition.started",
+            "Запущен фоновый цикл получения живого спектра.",
+            source_id=self._configured_acquisition_source_id(),
+            center_frequency_hz=self._acquisition_center_frequency_hz,
+            span_hz=self._acquisition_span_hz,
+            **self._configured_receive_trace_context(),
+        )
 
     def _stop_acquisition_thread(
         self,
@@ -777,6 +1039,138 @@ class ApplicationRuntime:
                 self._rf_scan_session.plan.dwell_time_ms / 1_000.0,
             )
 
+    def _configured_acquisition_source_id(self) -> str | None:
+        session = self._rf_scan_session
+        if session is not None:
+            return session.source_id
+        adapter = next(
+            (
+                item
+                for item in self.config.devices.adapters
+                if item.enabled
+                and not item.connection.upper().startswith("SIM:")
+            ),
+            None,
+        )
+        return adapter.id if adapter is not None else None
+
+    def _configured_receive_trace_context(self) -> dict[str, Any]:
+        source_id = self._configured_acquisition_source_id()
+        adapter = next(
+            (
+                item
+                for item in self.config.devices.adapters
+                if item.id == source_id
+            ),
+            None,
+        )
+        context: dict[str, Any] = {
+            "configured_sample_rate_hz": self.config.spectrum.sample_rate_hz,
+            "live_samples_expected": self.config.mode == "live",
+        }
+        if adapter is None:
+            return context
+        context["receiver_kind"] = adapter.kind
+        if adapter.kind == "rtlsdr":
+            context.update({"gain_mode": "auto"})
+        elif adapter.kind == "hackrf":
+            context.update(
+                {
+                    "gain_mode": "fixed_receive_only",
+                    "lna_gain_db": 16,
+                    "vga_gain_db": 20,
+                    "rf_amp_enabled": False,
+                }
+            )
+        elif adapter.kind == "tinysa":
+            context.update(
+                {
+                    "gain_mode": "device_sweep",
+                    "tinysa_model": adapter.tinysa_model,
+                    "tinysa_ultra_mode": adapter.tinysa_ultra_mode,
+                }
+            )
+        return context
+
+    def _trace_acquisition_request(
+        self,
+        *,
+        sequence: int,
+        center_frequency_hz: int,
+        span_hz: int,
+        scan_window: ScanWindow | None,
+    ) -> None:
+        """Emit a bounded DEBUG heartbeat for accepted hardware requests."""
+
+        now = time.monotonic()
+        with self._acquisition_lock:
+            self._acquisition_requests_submitted += 1
+            self._last_requested_center_frequency_hz = center_frequency_hz
+            self._last_requested_span_hz = span_hz
+            should_log = (
+                self._acquisition_requests_submitted == 1
+                or now - self._last_request_trace_monotonic
+                >= _ACQUISITION_TRACE_INTERVAL_SECONDS
+            )
+            if should_log:
+                self._last_request_trace_monotonic = now
+            submitted = self._acquisition_requests_submitted
+            received = self._acquisition_frames_received
+            consumed = self._acquisition_frames_consumed
+        if not should_log:
+            return
+        self._log(
+            "acquisition.capture_requested",
+            "Запрос живого RF-capture принят аппаратным worker.",
+            level=logging.DEBUG,
+            source_id=self._configured_acquisition_source_id(),
+            sequence=sequence,
+            center_frequency_hz=center_frequency_hz,
+            span_hz=span_hz,
+            scan_window_id=(
+                scan_window.window_id if scan_window is not None else None
+            ),
+            submitted_requests=submitted,
+            received_frames=received,
+            consumed_frames=consumed,
+            **self._configured_receive_trace_context(),
+        )
+
+    def _trace_captured_frame_locked(self, spectrum: SpectrumFrame) -> None:
+        """Emit at most one successful live-frame heartbeat per second."""
+
+        now = time.monotonic()
+        if (
+            self._acquisition_frames_consumed != 1
+            and now - self._last_frame_trace_monotonic
+            < _ACQUISITION_TRACE_INTERVAL_SECONDS
+        ):
+            return
+        self._last_frame_trace_monotonic = now
+        self._log(
+            "acquisition.frame_captured",
+            "Получен и принят свежий кадр спектра.",
+            level=logging.DEBUG,
+            source_id=spectrum.source_id,
+            sequence=spectrum.sequence,
+            provenance=spectrum.provenance.value,
+            center_frequency_hz=spectrum.center_frequency_hz,
+            span_hz=spectrum.span_hz,
+            bins=int(spectrum.power_dbm.size),
+            peak_level=spectrum.peak_level,
+            unit=spectrum.unit,
+            submitted_requests=self._acquisition_requests_submitted,
+            received_frames=self._acquisition_frames_received,
+            consumed_frames=self._acquisition_frames_consumed,
+            rejected_or_discarded_frames=max(
+                0,
+                self._acquisition_frames_received
+                - self._acquisition_frames_consumed,
+            ),
+            failure_attempts=self._acquisition_failure_attempts,
+            **self._configured_receive_trace_context(),
+        )
+
     def _acquisition_main(self, stop_event: Event) -> None:
         next_refresh = 0.0
         try:
@@ -828,6 +1222,12 @@ class ApplicationRuntime:
                                     )
                         if request_accepted:
                             self._acquisition_sequence = candidate_sequence
+                            self._trace_acquisition_request(
+                                sequence=candidate_sequence,
+                                center_frequency_hz=center_frequency_hz,
+                                span_hz=span_hz,
+                                scan_window=scan_window,
+                            )
                 except (AppError, OSError, RuntimeError, ValueError) as exc:
                     self._publish_acquisition_failure(exc)
                 else:
@@ -851,13 +1251,36 @@ class ApplicationRuntime:
     def _publish_acquisition_failure(self, exc: Exception) -> None:
         if isinstance(exc, AppError):
             detail = exc.message_ru
+            safe_hardware_context = {
+                key: value
+                for key in (
+                    "descriptor_count",
+                    "device_index",
+                    "error_type",
+                    "failure_class",
+                    "os_error_code",
+                )
+                if isinstance(
+                    (value := exc.technical_details.get(key)),
+                    (float, int, str),
+                )
+                and not isinstance(value, bool)
+            }
         else:
             detail = f"внутренняя ошибка {type(exc).__name__}"
+            safe_hardware_context = {}
         failure = (
             "SPECTRUM.READ_FAILED",
             f"Не удалось получить спектр: {detail}.",
         )
+        should_log = False
         with self._acquisition_lock:
+            self._acquisition_failure_attempts += 1
+            should_log = (
+                not self._spectrum_failure_active
+                or self._acquisition_failure is None
+                or self._acquisition_failure[0] != failure[0]
+            )
             self._set_spectrum_failure_locked(failure)
             if self._rf_scan_session is not None:
                 with suppress(AppError):
@@ -869,6 +1292,27 @@ class ApplicationRuntime:
                             else "SPECTRUM.READ_FAILED"
                         ),
                     )
+        if should_log:
+            self._log(
+                "acquisition.capture_failed",
+                "Живой RF-capture не завершён; вывод приостановлен до свежего кадра.",
+                level=logging.WARNING,
+                code=(exc.code if isinstance(exc, AppError) else failure[0]),
+                error_type=str(
+                    safe_hardware_context.pop("error_type", type(exc).__name__)
+                ),
+                source_id=self._configured_acquisition_source_id(),
+                requested_center_frequency_hz=(
+                    self._last_requested_center_frequency_hz
+                ),
+                requested_span_hz=self._last_requested_span_hz,
+                submitted_requests=self._acquisition_requests_submitted,
+                received_frames=self._acquisition_frames_received,
+                consumed_frames=self._acquisition_frames_consumed,
+                failure_attempts=self._acquisition_failure_attempts,
+                **safe_hardware_context,
+                **self._configured_receive_trace_context(),
+            )
 
     def _mark_scan_request_accepted(
         self,
@@ -973,6 +1417,7 @@ class ApplicationRuntime:
 
         key = (spectrum.source_id, spectrum.sequence, spectrum.captured_at)
         with self._acquisition_lock:
+            self._acquisition_frames_received += 1
             if key == self._last_consumed_frame_key:
                 return False
             scan_session = self._rf_scan_session
@@ -1192,6 +1637,8 @@ class ApplicationRuntime:
             self._last_consumed_frame_key = key
             self._acquisition_latest_frame = spectrum
             self._acquisition_latest_monotonic = time.monotonic()
+            self._acquisition_frames_consumed += 1
+            self._trace_captured_frame_locked(spectrum)
             self._signal_assessment = analysis.assessment
             if scan_session is not None:
                 before = scan_session.status()
@@ -1225,6 +1672,10 @@ class ApplicationRuntime:
                 decision_update.decision,
                 publish_new=decision_update.transition is not None,
             )
+            self._publish_rf_observation(
+                decision_update.decision,
+                spectrum=spectrum,
+            )
             if decision_update.transition is not None:
                 self._persist_rf_transition(
                     decision_update.decision,
@@ -1256,6 +1707,95 @@ class ApplicationRuntime:
                         partial_retained=partial is not None,
                     )
             return True
+
+    def _publish_rf_observation(
+        self,
+        decision: RfDecision,
+        *,
+        spectrum: SpectrumFrame,
+    ) -> None:
+        """Persist every energy-gate observation before a later frame replaces it."""
+
+        evidence = (
+            *decision.supporting_evidence,
+            *decision.contradicting_evidence,
+        )
+        raw_activity_observed = any(
+            item.code == "RF.RAW_ACTIVITY_OBSERVED" for item in evidence
+        )
+        activity_lifecycle = decision.lifecycle in {
+            DecisionLifecycle.CANDIDATE,
+            DecisionLifecycle.CONFIRMED,
+            DecisionLifecycle.HOLDING,
+            DecisionLifecycle.SUPPRESSED,
+        }
+        if not raw_activity_observed and not activity_lifecycle:
+            return
+        peak_excess_db = next(
+            (
+                item.measured
+                for item in evidence
+                if item.code
+                in {
+                    "RF.BELOW_ATTACK_THRESHOLD",
+                    "RF.PEAK_EXCESS",
+                }
+            ),
+            None,
+        )
+        self._log(
+            "signal_analysis.activity_observed",
+            "Энергетический детектор передал неподтверждённое RF-наблюдение.",
+            level=logging.DEBUG,
+            source_id=decision.source_id,
+            sequence=spectrum.sequence,
+            center_frequency_hz=spectrum.center_frequency_hz,
+            span_hz=spectrum.span_hz,
+            peak_frequency_hz=decision.peak_frequency_hz,
+            peak_excess_db=peak_excess_db,
+            lifecycle=decision.lifecycle.value,
+            family=decision.family.value,
+            evidence_codes=[item.code for item in evidence],
+        )
+        try:
+            event, publication = self._signal_processor.ingest_rf_decision(
+                decision,
+                received_at=self._clock(),
+            )
+        except Exception as exc:
+            # Classification/UI projection is isolated from hardware capture,
+            # but the loss is explicit and searchable in the field journal.
+            self._log(
+                "signal_processor.event_publish_failed",
+                "RF-наблюдение не удалось передать в операторскую шину.",
+                level=logging.ERROR,
+                source_id=decision.source_id,
+                sequence=spectrum.sequence,
+                error_type=type(exc).__name__,
+            )
+            return
+        if not publication.accepted and publication.delivery_failures == 0:
+            return
+        self._log(
+            "signal_processor.event_published",
+            "Неподтверждённая RF-активность передана в Event Bus.",
+            level=(
+                logging.WARNING
+                if publication.delivery_failures
+                else logging.DEBUG
+            ),
+            source_id=decision.source_id,
+            sequence=spectrum.sequence,
+            event_id=event.event_id,
+            trace_id=publication.trace_id,
+            event_type=event.event_type.value,
+            frequency_hz=event.frequency_hz,
+            accepted=publication.accepted,
+            reason_code=publication.reason_code,
+            bus_sequence=publication.sequence,
+            delivery_failures=publication.delivery_failures,
+            retained_in_history=publication.retained_in_history,
+        )
 
     def _background_acquisition_view(
         self,

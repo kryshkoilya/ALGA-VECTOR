@@ -103,12 +103,14 @@ class HackRfReceiveAdapter(DeviceAdapter):
                 + (f" · {self._firmware}" if self._firmware else "")
             ),
             sample_rate_hz=self.sample_rate_hz,
-            last_data_at=self._clock(),
             generation=1,
             metrics={
                 "receive_only": 1,
                 "rf_amp_enabled": 0,
                 "antenna_port_power_enabled": 0,
+                "gain_mode": "fixed_receive_only",
+                "lna_gain_db": 16,
+                "vga_gain_db": 20,
                 "tuning_profile_id": HACKRF_ONE_PROFILE.profile_id,
                 "tuning_min_hz": HACKRF_ONE_PROFILE.minimum_frequency_hz,
                 "tuning_max_hz": HACKRF_ONE_PROFILE.maximum_frequency_hz,
@@ -190,6 +192,17 @@ class HackRfReceiveAdapter(DeviceAdapter):
             calibration_id=None,
             uncertainty_db=None,
         )
+
+    def capture_metrics(self) -> dict[str, float | int | str]:
+        return {
+            "sample_rate_hz": self.sample_rate_hz,
+            "gain_mode": "fixed_receive_only",
+            "lna_gain_db": 16,
+            "vga_gain_db": 20,
+            "rf_amp_enabled": 0,
+            "antenna_port_power_enabled": 0,
+            "tuning_profile_id": HACKRF_ONE_PROFILE.profile_id,
+        }
 
     def reconnect(self) -> DeviceSnapshot:
         self._ensure_open()

@@ -4,8 +4,10 @@ import json
 import threading
 import time
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from alga_vector.application import ApplicationRuntime
@@ -13,6 +15,7 @@ from alga_vector.config.models import (
     AdapterConfig,
     AppConfig,
     DevicesConfig,
+    LoggingConfig,
     StorageConfig,
 )
 from alga_vector.devices import DeviceManager, FakeTinySAAdapter
@@ -24,6 +27,7 @@ from alga_vector.domain.models import (
     SpectrumFrame,
 )
 from alga_vector.signal_analysis import AssessmentState, QualityFlag
+from alga_vector.signal_processor import NormalizedEventType
 
 
 class CountingSpectrumManager:
@@ -174,6 +178,32 @@ class UnexpectedFailureManager(CountingSpectrumManager):
         raise TypeError("deterministic unexpected acquisition failure")
 
 
+class OneShotRfActivityManager(CountingSpectrumManager):
+    """Return one strong frame after a learned quiet floor, then go quiet."""
+
+    def read_spectrum(
+        self,
+        *,
+        sequence: int,
+        center_frequency_hz: int,
+        span_hz: int,
+        bins: int = 512,
+    ) -> SpectrumFrame | None:
+        frame = super().read_spectrum(
+            sequence=sequence,
+            center_frequency_hz=center_frequency_hz,
+            span_hz=span_hz,
+            bins=bins,
+        )
+        if frame is None:
+            return None
+        power = np.full(frame.power_dbm.shape, -100.0, dtype=np.float32)
+        if self.read_count == 10:
+            middle = power.size // 2
+            power[middle - 3 : middle + 4] = -70.0
+        return replace(frame, power_dbm=power)
+
+
 def _demo_config(tmp_path: Path, *, adapter_id: str = "configured-sim") -> AppConfig:
     return AppConfig(
         mode="demo",
@@ -278,6 +308,92 @@ def test_async_polling_allocates_sequences_only_to_accepted_capture_requests(
     assert QualityFlag.SEQUENCE_GAP not in snapshot.signal_assessment.quality_flags
     assert manager.read_count > len(manager.completed_sequences)
     runtime.shutdown()
+
+
+def test_debug_log_proves_capture_request_and_consumed_live_frame(
+    tmp_path: Path,
+) -> None:
+    manager = CountingSpectrumManager()
+    config = _demo_config(tmp_path).model_copy(
+        update={"logging": LoggingConfig(level="DEBUG")}
+    )
+    runtime = ApplicationRuntime(
+        config,
+        device_manager=manager,
+        background_acquisition=True,
+        acquisition_period_seconds=0.005,
+    )
+
+    runtime.start()
+    assert manager.wait_for_reads(5)
+    logger_path = runtime.logger_path
+    runtime.shutdown()
+
+    assert logger_path is not None
+    records = [
+        json.loads(line)
+        for line in logger_path.read_text(encoding="utf-8").splitlines()
+    ]
+    requested = next(
+        record
+        for record in records
+        if record.get("event") == "acquisition.capture_requested"
+    )
+    captured = next(
+        record
+        for record in records
+        if record.get("event") == "acquisition.frame_captured"
+    )
+    request_context = requested["context"]
+    capture_context = captured["context"]
+    assert request_context["center_frequency_hz"] == 433_920_000
+    assert request_context["configured_sample_rate_hz"] == 2_400_000
+    assert request_context["submitted_requests"] >= 1
+    assert capture_context["source_id"] == "background-radio"
+    assert capture_context["provenance"] == "simulated"
+    assert capture_context["received_frames"] >= 1
+    assert capture_context["consumed_frames"] >= 1
+    assert capture_context["bins"] == 512
+
+
+def test_short_rf_activity_reaches_event_bus_without_ui_snapshot(
+    tmp_path: Path,
+) -> None:
+    manager = OneShotRfActivityManager()
+    config = _demo_config(tmp_path).model_copy(
+        update={"logging": LoggingConfig(level="DEBUG")}
+    )
+    runtime = ApplicationRuntime(
+        config,
+        device_manager=manager,
+        background_acquisition=True,
+        acquisition_period_seconds=0.005,
+    )
+
+    runtime.start()
+    assert manager.wait_for_reads(14)
+    assert runtime.latest_snapshot is None
+
+    events = runtime.operator_event_bus.recent(limit=64)
+    activity = next(
+        event
+        for event in events
+        if event.event_type is NormalizedEventType.RADIO_ACTIVITY_DETECTED
+    )
+    assert activity.identity is None
+    assert "generic-activity" in activity.tags
+
+    logger_path = runtime.logger_path
+    runtime.shutdown()
+
+    assert logger_path is not None
+    records = [
+        json.loads(line)
+        for line in logger_path.read_text(encoding="utf-8").splitlines()
+    ]
+    names = {record.get("event") for record in records}
+    assert "signal_analysis.activity_observed" in names
+    assert "signal_processor.event_published" in names
 
 
 def test_unexpected_acquisition_exception_is_visible_and_logged(

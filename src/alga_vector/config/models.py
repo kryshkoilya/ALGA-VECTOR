@@ -107,6 +107,7 @@ class SpectrumConfig(StrictModel):
     span_hz: int = Field(default=2_000_000, ge=1_000)
     sample_rate_hz: int = Field(default=2_400_000, ge=8_000)
     threshold_level: float = Field(default=-72.4, ge=-200, le=30)
+    detection_sensitivity: Literal["low", "balanced", "high"] = "high"
 
 
 class AcousticConfig(StrictModel):
@@ -249,7 +250,7 @@ class LoggingConfig(StrictModel):
 
 
 class AppConfig(StrictModel):
-    schema_version: Literal[6] = 6
+    schema_version: Literal[7] = 7
     locale: Literal["ru"] = "ru"
     profile_name: str = Field(default="Полевой профиль 01", min_length=1, max_length=128)
     mode: Literal["live", "demo", "safe"] = "live"

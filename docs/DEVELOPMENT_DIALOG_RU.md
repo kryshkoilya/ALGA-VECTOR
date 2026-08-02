@@ -237,3 +237,46 @@ waterfall и техническое evidence остаются в EXPERT MODE.
 репозитория нет. Этот файл является редактированным техническим журналом:
 он сохраняет решения и проверяемые результаты без публикации приватных
 локальных путей, координат, аппаратных идентификаторов и сырой переписки.
+
+## Продолжение: полевой отказ и 1.0.0rc2
+
+В реальном полевом тесте оператор сообщил критический симптом: физический
+источник находился перед антенной, но SIMPLE MODE оставался тихим. Разбор двух
+видеозаписей, сохранённого профиля и JSONL показал не одну, а две причины:
+
+- рабочий сеанс наблюдал только 30,0–32,4 МГц;
+- отдельный сеанс не смог открыть выбранный RTL-SDR.
+
+Дополнительно найден программный разрыв: low-confidence energy candidate мог
+получить `IDLE/UNKNOWN`, ошибочно стать чистым фоном и исчезнуть до следующего
+UI snapshot.
+
+В `1.0.0rc2` измерительная цепочка изменена так:
+
+```text
+hardware frame
+  → energy detector
+  → temporal decision
+  → synchronous generic normalization
+  → UnifiedEventBus
+  → SIMPLE/EXPERT snapshot
+```
+
+Каждый energy-gate candidate теперь сохраняется как generic RF-активность до
+UI polling. Это осознанно повышает видимость слабых эпизодов, но не ослабляет
+identity policy: RF-всплеск не называется подтверждённым БПЛА. Также добавлены
+capability-driven startup scan, реальные capture/gain counters, подробные
+reason code открытия RTL-SDR и сквозной DEBUG-журнал.
+
+Проверенный результат `1.0.0rc2`:
+
+- Ruff: PASS;
+- strict Mypy: PASS, 115 исходных файлов;
+- Pytest: PASS, 559 тестов;
+- source/frozen/portable smoke: PASS;
+- SHA-256 ZIP:
+  `C4B1024D7A1AB8D2CBE590004F8C90DE0C2A4BB735360A0A3D3AC7AF73C835AE`.
+
+Подробности: [`RELEASE_100RC2_RU.md`](RELEASE_100RC2_RU.md),
+[`BUILD_REPORT_100RC2_RU.md`](BUILD_REPORT_100RC2_RU.md) и
+[`FIELD_DEBUG_RF_PIPELINE_RU.md`](FIELD_DEBUG_RF_PIPELINE_RU.md).

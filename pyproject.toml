@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alga-vector"
-version = "1.0.0rc1"
+version = "1.0.0rc2"
 description = "Russian-first offline Windows desktop foundation for civilian multi-sensor early warning."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

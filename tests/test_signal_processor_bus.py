@@ -70,9 +70,17 @@ def test_bus_deduplicates_semantic_episode_and_isolates_subscriber_failure() -> 
     repeated = bus.publish(_event("third", episode_id="episode"))
 
     assert first.accepted and first.delivery_failures == 1
+    assert first.reason_code == "EVENT.SUBSCRIBER_DELIVERY_FAILED"
+    assert first.trace_id == "first"
     assert duplicate.duplicate and not duplicate.accepted
+    assert duplicate.reason_code == "EVENT.DEDUPLICATED"
+    assert duplicate.trace_id == "second"
     assert repeated.accepted
     assert delivered == ["first", "third"]
+    assert bus.diagnostics.attempted == 3
+    assert bus.diagnostics.accepted == 2
+    assert bus.diagnostics.duplicates == 1
+    assert bus.diagnostics.delivery_failures == 2
 
 
 def test_bus_preserves_alarm_history_under_info_flood() -> None:
@@ -83,10 +91,12 @@ def test_bus_preserves_alarm_history_under_info_flood() -> None:
 
     assert low.accepted
     assert not low.retained_in_history
+    assert low.reason_code == "EVENT.HISTORY_CAPACITY_NOT_RETAINED"
     assert {item.event_id for item in bus.recent(limit=10)} == {
         "alarm-1",
         "alarm-2",
     }
+    assert bus.diagnostics.history_not_retained == 1
 
 
 def test_bus_history_and_dedup_index_are_bounded() -> None:

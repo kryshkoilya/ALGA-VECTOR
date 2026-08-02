@@ -1,6 +1,6 @@
 # ALGA VECTOR — полный обзор проекта
 
-> Актуальный release candidate: **1.0.0rc1**
+> Актуальный release candidate: **1.0.0rc2**
 > Стабильная версия до аппаратной приёмки RC: **0.7.0**
 > Платформа: **Windows 11 x64**, Python 3.12, PySide6  
 > Разработал: **Буйвол и Задира**
@@ -12,7 +12,7 @@ ALGA VECTOR — русскоязычное offline-first Windows-приложе�
 пользователь получает краткое описание ситуации, качество данных, доступное
 направление и следующий безопасный шаг.
 
-![SIMPLE MODE ALGA VECTOR 1.0.0rc1](screenshots/simple-mode-100rc1.png)
+![SIMPLE MODE ALGA VECTOR 1.0.0rc2](screenshots/simple-mode-100rc1.png)
 
 ## Быстрая навигация
 
@@ -20,8 +20,10 @@ ALGA VECTOR — русскоязычное offline-first Windows-приложе�
 - [Быстрый старт](QUICK_START_RU.txt)
 - [Продуктовая архитектура 1.0](ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)
 - [Историческая архитектура SIMPLE MODE / EXPERT MODE 0.7.0](SIMPLE_EXPERT_ARCHITECTURE_RU.md)
-- [Примечания к выпуску 1.0.0rc1](RELEASE_100RC1_RU.md)
-- [Отчёт сборки 1.0.0rc1](BUILD_REPORT_100RC1_RU.md)
+- [Примечания к выпуску 1.0.0rc2](RELEASE_100RC2_RU.md)
+- [Отчёт сборки 1.0.0rc2](BUILD_REPORT_100RC2_RU.md)
+- [Полевой debug RF-тракта](FIELD_DEBUG_RF_PIPELINE_RU.md)
+- [Исторический выпуск 1.0.0rc1](RELEASE_100RC1_RU.md)
 - [Примечания к предыдущей стабильной версии 0.7.0](RELEASE_070_RU.md)
 - [Исторический отчёт сборки 0.7.0](BUILD_REPORT_070_RU.md)
 - [Как участвовать в разработке](../CONTRIBUTING.md)
@@ -33,8 +35,8 @@ ALGA VECTOR:
 
 - обнаруживает изменения в пассивно принимаемом RF-спектре;
 - оценивает форму, полосу, длительность, повторяемость и качество наблюдения;
-- подавляет одиночные всплески temporal-логикой, debounce, hysteresis и
-  удержанием состояния;
+- показывает каждый energy-gate всплеск как неподтверждённую RF-активность,
+  но не повышает его до alertable-события без temporal-поддержки;
 - объединяет только свежие и прошедшие quality gate наблюдения;
 - дедуплицирует и коррелирует совместимые события в bounded target lifecycle;
 - показывает не более одной текущей цели и словесную стадию вместо потока
@@ -123,7 +125,7 @@ RF-тракт строит измеренный spectrum, оценивает bas
 требует повторяемости, dwell и достаточного качества данных. При retune
 состояния разных окон не смешиваются.
 
-Акустический модуль содержит проверяемый PCM feature/detection core. В 1.0.0rc1
+Акустический модуль содержит проверяемый PCM feature/detection core. В 1.0.0rc2
 bundled live-захват с микрофона и полевая модель конкретного объекта не входят
 в поставку.
 
@@ -203,11 +205,11 @@ Identity-like события проходят отдельный policy gate. В
 | Одно рекомендуемое действие | Детальная проверка состояния сенсоров |
 | Фильтр «Показывать только важное» | Инженерная настройка и диагностика |
 
-![EXPERT MODE — цели ALGA VECTOR 1.0.0rc1](screenshots/expert-targets-100rc1.png)
+![EXPERT MODE — цели ALGA VECTOR 1.0.0rc2](screenshots/expert-targets-100rc1.png)
 
 ## Оборудование и источники
 
-| Источник | Контракт 1.0.0rc1 | Важное ограничение |
+| Источник | Контракт 1.0.0rc2 | Важное ограничение |
 |---|---|---|
 | RTL-SDR | `RTLSDR:<index>`, IQ и spectrum в dBFS | Generic profile 24–1766 МГц; мгновенная полоса до 2,56 МГц; широкий план просматривается последовательно |
 | RTL-SDR Blog V4 | Только после точного подтверждения профиля backend/EEPROM | USB-строка `Generic RTL2832U OEM` не доказывает Blog V4 |
@@ -225,12 +227,15 @@ Identity-like события проходят отдельный policy gate. В
 
 1. Откройте раздел **Releases** репозитория.
 2. Скачайте
-   `ALGA_VECTOR-1.0.0rc1-Windows-x64-onedir.zip` и соседний `.sha256.txt`.
+   `ALGA_VECTOR-1.0.0rc2-Windows-x64-onedir.zip` и соседний `.sha256.txt`.
 3. Проверьте SHA-256:
 
    ```powershell
-   Get-FileHash .\ALGA_VECTOR-1.0.0rc1-Windows-x64-onedir.zip -Algorithm SHA256
+   Get-FileHash .\ALGA_VECTOR-1.0.0rc2-Windows-x64-onedir.zip -Algorithm SHA256
    ```
+
+   Ожидаемый SHA-256:
+   `C4B1024D7A1AB8D2CBE590004F8C90DE0C2A4BB735360A0A3D3AC7AF73C835AE`.
 
 4. Распакуйте архив в отдельный каталог. Не запускайте EXE непосредственно
    внутри ZIP.
@@ -349,10 +354,10 @@ Installer дополнительно требует Inno Setup 6:
 .\packaging\build.ps1
 ```
 
-Локальный release gate 1.0.0rc1 зафиксирован в
-[`BUILD_REPORT_100RC1_RU.md`](BUILD_REPORT_100RC1_RU.md): Ruff PASS, strict
-Mypy PASS по 114 source-файлам, pytest PASS — 534 теста, source/frozen/portable
-smoke и render SIMPLE/EXPERT 1440×900 прошли. Программные проверки не заменяют
+Локальный release gate 1.0.0rc2 зафиксирован в
+[`BUILD_REPORT_100RC2_RU.md`](BUILD_REPORT_100RC2_RU.md): Ruff PASS, strict
+Mypy PASS по 115 source-файлам, pytest PASS — 559 тестов, source/frozen/portable
+smoke прошли. Программные проверки не заменяют
 аппаратную и полевую приёмку. Исторический gate 0.7.0 сохранён в
 [`BUILD_REPORT_070_RU.md`](BUILD_REPORT_070_RU.md).
 

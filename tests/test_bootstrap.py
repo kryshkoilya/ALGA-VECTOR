@@ -152,6 +152,54 @@ def test_headless_smoke_passes_network_map_block(
     assert received["network_maps_override"] is False
 
 
+def test_debug_cli_enables_process_debug_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, object] = {}
+
+    def stop_after_capture(**kwargs: object) -> object:
+        received.update(kwargs)
+        raise RuntimeError("stop after bootstrap arguments")
+
+    monkeypatch.setattr(cli, "build_context", stop_after_capture)
+    args = build_parser().parse_args(
+        ["--debug", "--headless-smoke", "--skip-onboarding"]
+    )
+
+    assert cli._run(args) == 2
+    assert received["debug_logging_override"] is True
+
+
+def test_debug_logging_override_is_process_only(tmp_path: Path) -> None:
+    base = AppConfig()
+    effective = _apply_runtime_overrides(
+        base,
+        user_data_dir=tmp_path,
+        mode_override="live",
+        data_dir_override=None,
+        debug_logging_override=True,
+    )
+
+    assert effective.logging.level == "DEBUG"
+    candidate = effective.model_copy(
+        update={
+            "logging": effective.logging.model_copy(
+                update={"max_files": effective.logging.max_files + 1}
+            )
+        }
+    )
+    persisted = _persistable_config(
+        candidate,
+        base=base,
+        mode_overridden=False,
+        data_dir_overridden=False,
+        debug_logging_overridden=True,
+    )
+
+    assert persisted.logging.level == "INFO"
+    assert persisted.logging.max_files == base.logging.max_files + 1
+
+
 def test_launch_without_mode_is_always_live() -> None:
     args = build_parser().parse_args([])
 

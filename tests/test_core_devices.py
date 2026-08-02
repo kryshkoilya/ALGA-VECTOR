@@ -89,6 +89,17 @@ def test_manager_resolves_supported_capabilities_and_blocks_missing_provider() -
     )
     assert frame is not None
     assert frame.source_id == "fake-tinysa-01"
+    streaming = manager.snapshots()[0]
+    assert streaming.state == DeviceState.STREAMING
+    assert streaming.center_frequency_hz == 433_920_000
+    assert streaming.last_data_at == FIXED_TIME
+    assert streaming.metrics["capture_confirmed"] == 1
+    assert streaming.metrics["capture_active"] == 1
+    assert streaming.metrics["capture_success_count"] == 1
+
+    refreshed = manager.refresh()[0]
+    assert refreshed.state == DeviceState.STREAMING
+    assert refreshed.metrics["capture_success_count"] == 1
 
 
 def test_builder_never_turns_unknown_connections_into_active_probes() -> None:

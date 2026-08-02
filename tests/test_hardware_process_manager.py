@@ -164,6 +164,12 @@ def test_spawn_worker_round_trips_a_simulated_numpy_spectrum() -> None:
         assert frame.source_id == "simulated-radio"
         assert frame.sequence == 7
         assert frame.power_dbm.shape == (64,)
+        streaming = manager.snapshots()[0]
+        assert streaming.state == DeviceState.STREAMING
+        assert streaming.center_frequency_hz == 433_920_000
+        assert streaming.last_data_at == frame.captured_at
+        assert streaming.metrics["capture_confirmed"] == 1
+        assert streaming.metrics["capture_active"] == 1
     finally:
         manager.close()
 

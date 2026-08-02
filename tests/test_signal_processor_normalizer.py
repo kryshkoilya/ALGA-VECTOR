@@ -134,6 +134,68 @@ def test_generic_rf_decision_never_becomes_identity_event() -> None:
     assert "радиоактивность" not in rf_event.summary_ru
 
 
+def test_idle_unknown_observation_is_not_mislabeled_as_clean_background() -> None:
+    raw_trace = "rf-frame-trace-42"
+    decision = replace(
+        _decision(lifecycle=DecisionLifecycle.IDLE),
+        family=RfFamily.UNKNOWN,
+        family_explanation_ru="Неопределённая RF-форма.",
+        peak_frequency_hz=915_000_000.0,
+        occupied_bandwidth_hz=250_000.0,
+        heuristic_score=0.3,
+        abstained=True,
+        supporting_evidence=(
+            DecisionEvidence(
+                code="RF.RAW_ACTIVITY_OBSERVED",
+                explanation_ru="Энергетический порог кадра пройден.",
+                measured=raw_trace,
+            ),
+        ),
+        contradicting_evidence=(
+            DecisionEvidence(
+                code="RF.BELOW_ATTACK_THRESHOLD",
+                explanation_ru="Порог temporal-кандидата ещё не достигнут.",
+                measured=6.0,
+                threshold=7.0,
+            ),
+        ),
+    )
+
+    result = SnapshotEventNormalizer().normalize(_snapshot(decision))
+    radio = next(
+        event
+        for event in result.events
+        if event.event_type is NormalizedEventType.RADIO_ACTIVITY_DETECTED
+    )
+
+    assert not any(
+        event.event_type is NormalizedEventType.NOISE_BACKGROUND
+        for event in result.events
+    )
+    assert radio.frequency_hz == 915_000_000.0
+    assert {item.code for item in radio.evidence} >= {
+        "RF.RAW_ACTIVITY_OBSERVED",
+        "RF.BELOW_ATTACK_THRESHOLD",
+    }
+    assert any(item.measured == raw_trace for item in radio.evidence)
+
+
+def test_suppressed_observation_remains_generic_activity_not_sensor_failure() -> None:
+    result = SnapshotEventNormalizer().normalize(
+        _snapshot(_decision(lifecycle=DecisionLifecycle.SUPPRESSED))
+    )
+
+    assert any(
+        event.event_type is NormalizedEventType.RADIO_ACTIVITY_DETECTED
+        for event in result.events
+    )
+    assert not any(
+        event.event_type is NormalizedEventType.SENSOR_UNAVAILABLE
+        and event.sources[0].sensor_id == "rtl-1"
+        for event in result.events
+    )
+
+
 def test_activity_without_df_emits_explicit_direction_fallback() -> None:
     result = SnapshotEventNormalizer().normalize(_snapshot(_decision()))
 

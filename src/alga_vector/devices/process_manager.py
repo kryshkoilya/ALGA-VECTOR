@@ -6,6 +6,7 @@ import multiprocessing
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
+from dataclasses import replace
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from threading import RLock
@@ -452,6 +453,49 @@ class HardwareProcessDeviceManager:
                 )
             else:
                 self._completed_spectrum = result
+                if isinstance(result, SpectrumFrame):
+                    self._publish_completed_frame(result)
+
+    def _publish_completed_frame(self, frame: SpectrumFrame) -> None:
+        """Reflect worker capture proof immediately in the cached snapshot."""
+
+        updated: list[DeviceSnapshot] = []
+        for snapshot in self._cached_snapshots:
+            if snapshot.device_id != frame.source_id:
+                updated.append(snapshot)
+                continue
+            metrics = dict(snapshot.metrics)
+            successes = metrics.get("capture_success_count", 0)
+            success_count = (
+                int(successes)
+                if isinstance(successes, (int, float))
+                and not isinstance(successes, bool)
+                else 0
+            ) + 1
+            metrics.update(
+                {
+                    "capture_success_count": success_count,
+                    "capture_confirmed": 1,
+                    "capture_active": 1,
+                    "last_capture_sequence": frame.sequence,
+                    "last_capture_bins": int(frame.power_dbm.size),
+                    "last_capture_peak_level": frame.peak_level,
+                    "last_capture_unit": frame.unit,
+                    "last_capture_provenance": frame.provenance.value,
+                    "last_capture_span_hz": frame.span_hz,
+                }
+            )
+            updated.append(
+                replace(
+                    snapshot,
+                    state=DeviceState.STREAMING,
+                    health=HealthLevel.HEALTHY,
+                    center_frequency_hz=frame.center_frequency_hz,
+                    last_data_at=frame.captured_at,
+                    metrics=metrics,
+                )
+            )
+        self._cached_snapshots = tuple(updated)
 
     def _rpc(
         self,

@@ -223,6 +223,7 @@ def _content_fingerprint(event: NormalizedEvent) -> str:
     # delivery envelope. Event id and receipt time are transport metadata;
     # measured/derived observation content must remain semantically equal.
     payload.pop("event_id", None)
+    payload.pop("trace_id", None)
     payload.pop("received_at", None)
     encoded = json.dumps(
         payload,

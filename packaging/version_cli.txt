@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'Буйвол и Задира'),
           StringStruct('FileDescription', 'ALGA VECTOR CLI'),
-          StringStruct('FileVersion', '1.0.0rc1'),
+          StringStruct('FileVersion', '1.0.0rc2'),
           StringStruct('InternalName', 'ALGA VECTOR CLI'),
           StringStruct('LegalCopyright', 'Copyright (c) 2026 Буйвол и Задира'),
           StringStruct('OriginalFilename', 'ALGA VECTOR CLI.exe'),
           StringStruct('ProductName', 'ALGA VECTOR'),
-          StringStruct('ProductVersion', '1.0.0rc1')
+          StringStruct('ProductVersion', '1.0.0rc2')
         ]
       )
     ]),

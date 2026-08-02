@@ -44,6 +44,15 @@ def test_default_config_round_trip(tmp_path: Path) -> None:
 
 def test_default_spectrum_span_is_safe_for_rtlsdr() -> None:
     assert SpectrumConfig().span_hz == 2_000_000
+    assert SpectrumConfig().detection_sensitivity == "high"
+
+
+def test_detection_sensitivity_is_strict() -> None:
+    assert SpectrumConfig(detection_sensitivity="balanced").detection_sensitivity == (
+        "balanced"
+    )
+    with pytest.raises(ValidationError, match="detection_sensitivity"):
+        SpectrumConfig(detection_sensitivity="maximum")  # type: ignore[arg-type]
 
 
 def test_enabled_rtlsdr_rejects_span_above_sample_rate() -> None:
@@ -248,7 +257,7 @@ def test_schema_v1_is_migrated_to_location_and_map_defaults(tmp_path: Path) -> N
     loaded = ConfigService(default, user)
     config = loaded.load().config
 
-    assert config.schema_version == 6
+    assert config.schema_version == 7
     assert config.location.source == "unset"
     assert config.map.package_path is None
     assert config.map.network_enabled is False
@@ -296,7 +305,7 @@ def test_schema_v1_clamps_legacy_rtlsdr_span_instead_of_fallback(
     loaded = ConfigService(default, user).load()
 
     assert loaded.used_fallback is False
-    assert loaded.config.schema_version == 6
+    assert loaded.config.schema_version == 7
     assert loaded.config.spectrum.span_hz == 2_400_000
     assert loaded.config.first_run_complete is True
     assert [adapter.id for adapter in loaded.config.devices.adapters] == [
@@ -340,7 +349,7 @@ def test_schema_v2_removes_unimplemented_and_live_simulated_adapters(
 
     config = ConfigService(default, user).load().config
 
-    assert config.schema_version == 6
+    assert config.schema_version == 7
     assert [adapter.id for adapter in config.devices.adapters] == ["supported"]
     assert config.spectrum.threshold_level == -72.4
 
@@ -357,7 +366,7 @@ def test_schema_v3_keeps_legacy_map_network_disabled(tmp_path: Path) -> None:
 
     config = ConfigService(default, user).load().config
 
-    assert config.schema_version == 6
+    assert config.schema_version == 7
     assert config.map.network_enabled is False
     assert config.map.online_cache_mib == 256
 
@@ -365,7 +374,7 @@ def test_schema_v3_keeps_legacy_map_network_disabled(tmp_path: Path) -> None:
 def test_multisensor_defaults_are_fail_closed() -> None:
     config = AppConfig()
 
-    assert config.schema_version == 6
+    assert config.schema_version == 7
     assert config.acoustic.enabled is False
     assert config.acoustic.source == "disabled"
     assert config.airspace.enabled is False
@@ -387,9 +396,24 @@ def test_schema_v5_adds_fail_closed_target_tracking_defaults(
 
     config = ConfigService(default, user).load().config
 
-    assert config.schema_version == 6
+    assert config.schema_version == 7
     assert config.target_tracking.maximum_active_targets == 64
     assert config.target_tracking.stale_after_seconds == 30.0
+
+
+def test_schema_v6_adds_explicit_field_sensitivity(tmp_path: Path) -> None:
+    default = tmp_path / "default.yaml"
+    user = tmp_path / "user.yaml"
+    payload = AppConfig().model_dump(mode="json")
+    payload["schema_version"] = 6
+    payload["spectrum"].pop("detection_sensitivity")
+    _write(user, payload)
+    _write(default, AppConfig().model_dump(mode="json"))
+
+    config = ConfigService(default, user).load().config
+
+    assert config.schema_version == 7
+    assert config.spectrum.detection_sensitivity == "high"
 
 
 def test_target_tracking_lifecycle_windows_are_ordered() -> None:

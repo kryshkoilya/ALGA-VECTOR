@@ -324,7 +324,9 @@ def test_settings_load_all_values_and_do_not_clobber_dirty_form(
             "span_hz": 2_500_000,
             "sample_rate_hz": 3_200_000,
             "threshold_level": -61.5,
+            "detection_sensitivity": "balanced",
         },
+        "logging": {"level": "DEBUG"},
         "location": {"source": "manual", "gps_port": ""},
     }
     runtime.manual_base_calls = []
@@ -352,6 +354,8 @@ def test_settings_load_all_values_and_do_not_clobber_dirty_form(
     assert page.span.value() == 2500.0
     assert page.sample_rate.value() == 3.2
     assert page.threshold.value() == -61.5
+    assert page.detection_sensitivity.currentData() == "balanced"
+    assert page.log_level.currentData() == "DEBUG"
     assert page.real_adapters.isChecked()
 
     page.hardware_table.selectRow(1)
@@ -373,6 +377,8 @@ def test_settings_load_all_values_and_do_not_clobber_dirty_form(
         runtime.applied[0]["devices"]["adapters"][1]["rtlsdr_profile"]
         == "blog_v4"
     )
+    assert runtime.applied[0]["spectrum"]["detection_sensitivity"] == "balanced"
+    assert runtime.applied[0]["logging"]["level"] == "DEBUG"
     assert "map" not in runtime.applied[0]
     assert "location" not in runtime.applied[0]
     assert page._legacy_location_panel.isHidden()
@@ -799,6 +805,57 @@ def test_acknowledged_incident_is_still_active_in_diagnostics(
     assert page.acknowledge.text() == "Ознакомление подтверждено"
     assert not page.acknowledge.isEnabled()
     assert page.header.status.text() != "СИСТЕМА СТАБИЛЬНА"
+    page.close()
+
+
+@pytest.mark.ui
+def test_diagnostics_exposes_live_frame_gain_sensitivity_and_log(
+    qt_app: QApplication,
+) -> None:
+    runtime = FakeRuntime()
+    runtime.snapshot.mode = "live"
+    runtime.snapshot.runtime_mode = "live"
+    runtime.snapshot.experience_level = "expert"
+    runtime.snapshot.devices = (
+        SimpleNamespace(
+            device_id="rtl-01",
+            display_name="RTL-SDR Blog V4",
+            kind="rtlsdr",
+            connection="RTLSDR:0",
+            state="streaming",
+            health="healthy",
+            driver="pyrtlsdr/librtlsdr",
+            sample_rate_hz=2_400_000,
+            center_frequency_hz=915_000_000,
+            metrics={"gain_mode": "auto", "applied_gain": "auto"},
+        ),
+    )
+    runtime.snapshot.spectrum = SimpleNamespace(
+        source_id="rtl-01",
+        sequence=42,
+        center_frequency_hz=915_000_000,
+        span_hz=2_000_000,
+        data_age_ms=18,
+        dropped_frames=0,
+        unit="dBFS",
+    )
+    runtime.settings_snapshot = lambda: {
+        "spectrum": {"detection_sensitivity": "high"},
+        "logging": {"level": "DEBUG"},
+    }
+    runtime.logger_path = "D:\\ALGA\\logs\\alga-vector.jsonl"
+
+    page = DiagnosticsPage(runtime)
+    page.refresh(runtime.current_snapshot())
+    qt_app.processEvents()
+
+    assert page.pipeline_values["source"].text() == "ЖИВЫЕ ДАННЫЕ"
+    assert "seq=42" in page.pipeline_values["frame"].text()
+    assert "2.400 MSPS" in page.pipeline_values["sample_gain"].text()
+    assert "gain AUTO" in page.pipeline_values["sample_gain"].text()
+    assert page.pipeline_values["sensitivity"].text().startswith("HIGH")
+    assert "DEBUG" in page.pipeline_values["log"].text()
+    assert "alga-vector.jsonl" in page.pipeline_values["log"].text()
     page.close()
 
 

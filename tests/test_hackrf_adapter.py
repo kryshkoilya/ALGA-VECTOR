@@ -75,7 +75,10 @@ def test_hackrf_adapter_uses_receive_only_command_and_returns_live_dbfs() -> Non
     )
 
     assert snapshot.metrics["receive_only"] == 1
+    assert snapshot.last_data_at is None
     assert snapshot.metrics["rf_amp_enabled"] == 0
+    assert snapshot.metrics["lna_gain_db"] == 16
+    assert snapshot.metrics["vga_gain_db"] == 20
     assert frame.provenance == Provenance.LIVE
     assert frame.unit == "dBFS"
     assert frame.power_dbm.shape == (64,)

@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -17,10 +18,18 @@ from PySide6.QtWidgets import (
 )
 
 from ..multisensor_presenter import MultiSensorView, present_multisensor
-from ..runtime import attr, call_runtime, current_snapshot, items, value_of
+from ..runtime import (
+    attr,
+    call_runtime,
+    current_snapshot,
+    items,
+    provenance_key,
+    provenance_ru,
+    value_of,
+)
 from ..theme import Colors
 from ..widgets import InlineNotice, MetricTile, Panel
-from .common import OperatorPage
+from .common import OperatorPage, device_state_ru, format_frequency
 
 
 class DiagnosticsPage(OperatorPage):
@@ -44,6 +53,33 @@ class DiagnosticsPage(OperatorPage):
         metrics.addWidget(self.errors)
         metrics.addWidget(self.revision)
         self.root_layout.addLayout(metrics)
+
+        self.pipeline_panel = Panel(
+            "Полевой тракт данных",
+            subtitle="DEVICE → CAPTURE → DETECTOR → EVENT BUS → UI",
+            compact=True,
+        )
+        self.pipeline_panel.setObjectName("fieldPipelineDiagnostics")
+        pipeline_form = QFormLayout()
+        self.pipeline_values: dict[str, QLabel] = {}
+        for key, caption in (
+            ("source", "Источник данных"),
+            ("device", "Активный приёмник"),
+            ("frame", "Последний RF-кадр"),
+            ("tuning", "Фактическое окно"),
+            ("sample_gain", "Sample rate / gain"),
+            ("sensitivity", "Чувствительность"),
+            ("log", "Структурированный журнал"),
+        ):
+            value = QLabel("—")
+            value.setWordWrap(True)
+            value.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            pipeline_form.addRow(caption, value)
+            self.pipeline_values[key] = value
+        self.pipeline_panel.content_layout.addLayout(pipeline_form)
+        self.root_layout.addWidget(self.pipeline_panel)
 
         self.sensor_panel = Panel(
             "Сенсорные контуры",
@@ -138,6 +174,7 @@ class DiagnosticsPage(OperatorPage):
         super().refresh(snapshot)
         self._refresh_sensor_states(present_multisensor(snapshot))
         devices = items(snapshot, "devices")
+        self._refresh_live_pipeline(snapshot, devices)
         health_values = [value_of(attr(device, "health", "unknown")).lower() for device in devices]
         healthy = health_values.count("healthy")
         degraded = health_values.count("degraded")
@@ -216,6 +253,87 @@ class DiagnosticsPage(OperatorPage):
         if self._incidents and self.table.currentRow() < 0:
             self.table.selectRow(0)
         self._show_selected()
+
+    def _refresh_live_pipeline(
+        self,
+        snapshot: object | None,
+        devices: tuple[object, ...],
+    ) -> None:
+        provenance = provenance_key(snapshot)
+        self.pipeline_values["source"].setText(provenance_ru(snapshot))
+        self.pipeline_panel.subtitle_label.setText(
+            "DEVICE → CAPTURE → DETECTOR → EVENT BUS → UI"
+            + (" · LIVE" if provenance == "live" else " · НЕ LIVE")
+        )
+
+        frame = attr(snapshot, "spectrum")
+        source_id = str(attr(frame, "source_id", "")).strip()
+        device = next(
+            (
+                candidate
+                for candidate in devices
+                if str(attr(candidate, "device_id", "")) == source_id
+            ),
+            devices[0] if len(devices) == 1 else None,
+        )
+        if device is None:
+            self.pipeline_values["device"].setText(
+                "Не определён: живой приёмник не вернул кадр"
+            )
+        else:
+            self.pipeline_values["device"].setText(
+                f"{attr(device, 'display_name', source_id or 'Приёмник')} · "
+                f"{device_state_ru(device)} · {attr(device, 'driver', 'драйвер не указан')}"
+            )
+
+        if frame is None:
+            self.pipeline_values["frame"].setText(
+                "Нет принятого кадра; detector и event bus пока не получили RF-вход"
+            )
+            self.pipeline_values["tuning"].setText("Нет фактического окна")
+        else:
+            sequence = attr(frame, "sequence", "—")
+            age_ms = attr(frame, "data_age_ms", "—")
+            dropped = attr(frame, "dropped_frames", 0)
+            unit = str(attr(frame, "unit", "уровень без единицы"))
+            self.pipeline_values["frame"].setText(
+                f"{source_id or 'неизвестный источник'} · seq={sequence} · "
+                f"age={age_ms} ms · dropped={dropped} · {unit}"
+            )
+            self.pipeline_values["tuning"].setText(
+                f"центр {format_frequency(attr(frame, 'center_frequency_hz'))} · "
+                f"полоса {format_frequency(attr(frame, 'span_hz'))}"
+            )
+
+        metrics = attr(device, "metrics", {}) or {}
+        sample_rate = attr(device, "sample_rate_hz")
+        sample_text = (
+            f"{float(sample_rate) / 1_000_000:.3f} MSPS"
+            if isinstance(sample_rate, (int, float))
+            else "sample rate не сообщён"
+        )
+        self.pipeline_values["sample_gain"].setText(
+            f"{sample_text} · {_diagnostic_gain_text(device, metrics)}"
+        )
+
+        settings = _runtime_settings(self.runtime)
+        spectrum_settings = attr(settings, "spectrum")
+        sensitivity = str(
+            attr(spectrum_settings, "detection_sensitivity", "high")
+        ).lower()
+        self.pipeline_values["sensitivity"].setText(
+            {
+                "high": "HIGH · раннее обнаружение, возможен дополнительный фон",
+                "balanced": "BALANCED · штатный компромисс",
+                "low": "LOW · консервативный порог",
+            }.get(sensitivity, f"Неизвестное значение: {sensitivity}")
+        )
+        logging_settings = attr(settings, "logging")
+        log_level = str(attr(logging_settings, "level", "INFO")).upper()
+        log_path = getattr(self.runtime, "logger_path", None)
+        self.pipeline_values["log"].setText(
+            f"{log_level} · {log_path if log_path is not None else 'файл недоступен'}"
+        )
 
     def _refresh_sensor_states(self, view: MultiSensorView) -> None:
         self.sensor_panel.setVisible(view.present)
@@ -297,3 +415,37 @@ def _sensor_level_color(level: str) -> str:
         "warning": Colors.WARNING,
         "critical": Colors.CRITICAL,
     }.get(level, Colors.MUTED)
+
+
+def _runtime_settings(runtime: object | None) -> object:
+    if runtime is None:
+        return {}
+    getter = getattr(runtime, "settings_snapshot", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            return {}
+    return attr(runtime, "config", {})
+
+
+def _diagnostic_gain_text(device: object | None, metrics: object) -> str:
+    kind = value_of(attr(device, "kind")).lower()
+    lna = attr(metrics, "lna_gain_db")
+    vga = attr(metrics, "vga_gain_db")
+    if kind == "hackrf" and isinstance(lna, (int, float)) and isinstance(
+        vga, (int, float)
+    ):
+        return f"LNA {lna:g} dB / VGA {vga:g} dB / RF amp OFF"
+    mode = value_of(attr(metrics, "gain_mode")).lower()
+    applied = value_of(attr(metrics, "applied_gain")).lower()
+    if mode == "auto":
+        return (
+            "gain AUTO (ожидает первый capture)"
+            if applied in {"", "pending_first_capture"}
+            else f"gain AUTO (applied={applied})"
+        )
+    gain = attr(metrics, "gain_db", attr(metrics, "gain"))
+    if isinstance(gain, (int, float)):
+        return f"gain {gain:g} dB"
+    return "gain не сообщён адаптером"
