@@ -66,6 +66,7 @@ def test_tinysa_reads_only_explicit_port_and_returns_dbm() -> None:
     )
 
     assert snapshot.connection == "COM7"
+    assert snapshot.last_data_at is None
     assert frame.provenance == Provenance.LIVE
     assert frame.unit == "dBm"
     assert frame.calibration_id is None
@@ -230,7 +231,11 @@ def test_rtlsdr_computes_live_dbfs_spectrum() -> None:
         rtlsdr_module=SimpleNamespace(RtlSdr=factory),
     )
 
-    assert adapter.inspect().metrics["device_index"] == 2
+    initial_snapshot = adapter.inspect()
+    assert initial_snapshot.last_data_at is None
+    assert initial_snapshot.metrics["device_index"] == 2
+    assert initial_snapshot.metrics["gain_mode"] == "auto"
+    assert initial_snapshot.metrics["applied_gain"] == "pending_first_capture"
     frame = adapter.read_spectrum(
         sequence=9,
         center_frequency_hz=433_920_000,
@@ -247,6 +252,7 @@ def test_rtlsdr_computes_live_dbfs_spectrum() -> None:
     # The synthetic tone is +300 kHz from centre.  In a ±600 kHz requested
     # span it belongs near 75% of the displayed frequency axis.
     assert 88 <= int(np.argmax(frame.power_dbm)) <= 104
+    assert adapter.inspect().metrics["applied_gain"] == "auto"
 
 
 def test_rtlsdr_reuses_identical_tuning_and_discards_only_after_retune() -> None:
@@ -386,6 +392,76 @@ def test_rtlsdr_tune_or_read_failure_invalidates_receiver(
     assert created[0].closed
     assert adapter.inspect().state.value == "ready"
     assert len(created) == 2
+
+
+@pytest.mark.parametrize(
+    ("backend_message", "expected_code", "failure_class"),
+    [
+        ("Resource busy", "DEVICE.RTLSDR_BUSY", "device_busy"),
+        ("Access denied", "DEVICE.RTLSDR_ACCESS_DENIED", "access_denied"),
+        (
+            "libusb backend DLL missing",
+            "DEVICE.RTLSDR_DRIVER_UNAVAILABLE",
+            "driver_or_backend",
+        ),
+    ],
+)
+def test_rtlsdr_open_failure_is_classified_without_raw_backend_text(
+    backend_message: str,
+    expected_code: str,
+    failure_class: str,
+) -> None:
+    def fail_open(*, device_index: int) -> FakeRtlReceiver:
+        del device_index
+        raise OSError(backend_message)
+
+    adapter = RtlSdrAdapter(
+        adapter_id="rtl-open-failure",
+        connection="RTLSDR:0",
+        sample_rate_hz=2_400_000,
+        rtlsdr_module=SimpleNamespace(RtlSdr=fail_open),
+    )
+
+    with pytest.raises(AppError) as caught:
+        adapter.inspect()
+
+    assert caught.value.code == expected_code
+    assert caught.value.technical_details["failure_class"] == failure_class
+    assert caught.value.technical_details["error_type"] == "OSError"
+    assert "error" not in caught.value.technical_details
+    assert backend_message not in str(caught.value.technical_details)
+    assert "SDR#" in caught.value.operator_action_ru
+    assert "ALGA VECTOR" in caught.value.operator_action_ru
+    assert "WinUSB" in caught.value.operator_action_ru
+
+
+def test_rtlsdr_open_failure_distinguishes_missing_descriptor() -> None:
+    def fail_open(*, device_index: int) -> FakeRtlReceiver:
+        del device_index
+        raise OSError("backend refused open")
+
+    module = SimpleNamespace(
+        RtlSdr=fail_open,
+        librtlsdr=SimpleNamespace(rtlsdr_get_device_count=lambda: 1),
+    )
+    adapter = RtlSdrAdapter(
+        adapter_id="rtl-missing-index",
+        connection="RTLSDR:3",
+        sample_rate_hz=2_400_000,
+        rtlsdr_module=module,
+    )
+
+    with pytest.raises(AppError) as caught:
+        adapter.inspect()
+
+    assert caught.value.code == "DEVICE.RTLSDR_DESCRIPTOR_ABSENT"
+    assert caught.value.technical_details == {
+        "device_index": 3,
+        "error_type": "OSError",
+        "descriptor_count": 1,
+        "failure_class": "descriptor_absent",
+    }
+    assert "повторный поиск" in caught.value.operator_action_ru
 
 
 def test_driver_confirmed_blog_v4_uses_upconverter_without_direct_sampling() -> None:

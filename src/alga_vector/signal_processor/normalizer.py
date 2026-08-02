@@ -67,7 +67,11 @@ class SnapshotEventNormalizer:
         sensors = self._sensor_states(snapshot, now)
         events: list[NormalizedEvent] = []
 
-        rf_event = self._rf_event(snapshot.signal_decision, now)
+        rf_event = (
+            self.normalize_rf_decision(snapshot.signal_decision, now=now)
+            if snapshot.signal_decision is not None
+            else None
+        )
         if rf_event is not None:
             events.append(rf_event)
 
@@ -103,6 +107,24 @@ class SnapshotEventNormalizer:
         )
         events.extend(unavailable)
         return NormalizationResult(events=tuple(events), sensors=sensors)
+
+    def normalize_rf_decision(
+        self,
+        decision: RfDecision,
+        *,
+        now: datetime,
+    ) -> NormalizedEvent:
+        """Normalize one RF decision without waiting for a UI snapshot.
+
+        Acquisition uses this narrow entry point so a short energy-gate event
+        cannot disappear between hardware frames before the next UI refresh.
+        Identity policy is unchanged: RF-only input remains generic activity.
+        """
+
+        event = self._rf_event(decision, now)
+        if event is None:  # defensive: a concrete decision must always map
+            raise RuntimeError("RF decision did not produce a normalized event")
+        return event
 
     def _sensor_states(
         self,
@@ -248,6 +270,11 @@ class SnapshotEventNormalizer:
         if decision is None:
             return None
         source = self._rf_sources(decision)
+        decision_evidence = (
+            *decision.supporting_evidence,
+            *decision.contradicting_evidence,
+            *decision.missing_confirmation,
+        )
         evidence = tuple(
             EvidenceFact(
                 code=item.code,
@@ -255,7 +282,7 @@ class SnapshotEventNormalizer:
                 source_id=decision.source_id,
                 measured=item.measured,
             )
-            for item in decision.supporting_evidence
+            for item in decision_evidence
         )
         limitations = tuple(
             dict.fromkeys(
@@ -265,10 +292,14 @@ class SnapshotEventNormalizer:
         )
         received_at = max(now, decision.observed_at)
         valid_until = decision.observed_at + timedelta(seconds=10)
-        if decision.lifecycle in {
-            DecisionLifecycle.DATA_HOLD,
-            DecisionLifecycle.SUPPRESSED,
-        }:
+        raw_activity_observed = any(
+            item.code == "RF.RAW_ACTIVITY_OBSERVED"
+            for item in decision.supporting_evidence
+        )
+        if (
+            decision.lifecycle is DecisionLifecycle.DATA_HOLD
+            and not raw_activity_observed
+        ):
             return self._make_event(
                 event_id=_stable_id(
                     "rf-data-unavailable",
@@ -303,7 +334,7 @@ class SnapshotEventNormalizer:
             )
         if (
             decision.family is RfFamily.BACKGROUND
-            or decision.lifecycle is DecisionLifecycle.IDLE
+            and decision.lifecycle is DecisionLifecycle.IDLE
         ):
             return self._make_event(
                 event_id=_stable_id(
@@ -337,6 +368,7 @@ class SnapshotEventNormalizer:
             else EventSeverity.NOTICE
         )
         family_ru = _rf_family_ru(decision.family)
+        lifecycle_ru = _rf_lifecycle_ru(decision.lifecycle)
         return self._make_event(
             event_id=_stable_id(
                 "rf-activity",
@@ -355,6 +387,7 @@ class SnapshotEventNormalizer:
             summary_ru=_rf_summary(decision.peak_frequency_hz),
             explanation_ru=(
                 f"Форма активности: {family_ru}. "
+                f"Статус обработки: {lifecycle_ru}. "
                 "Физический источник по частоте и спектральной форме не установлен."
             ),
             sources=source,
@@ -365,8 +398,15 @@ class SnapshotEventNormalizer:
             ),
             frequency_hz=decision.peak_frequency_hz,
             bandwidth_hz=decision.occupied_bandwidth_hz,
-            episode_id=decision.episode_id,
-            tags=("rf", "generic-activity"),
+            episode_id=(
+                decision.episode_id
+                or f"rf-unconfirmed:{decision.source_id}"
+            ),
+            tags=(
+                "rf",
+                "generic-activity",
+                f"lifecycle-{decision.lifecycle.value}",
+            ),
         )
 
     @staticmethod
@@ -704,6 +744,7 @@ class SnapshotEventNormalizer:
                         "sensor-unavailable",
                         device.device_id,
                         device.state.value,
+                        now.isoformat(),
                     ),
                     event_type=NormalizedEventType.SENSOR_UNAVAILABLE,
                     observed_at=now,
@@ -727,6 +768,10 @@ class SnapshotEventNormalizer:
                             explanation_ru="Источник сообщения о состоянии.",
                         ),
                     ),
+                    episode_id=(
+                        f"sensor-unavailable:{device.device_id}:"
+                        f"{device.state.value}"
+                    ),
                     tags=("sensor", "unavailable"),
                 )
             )
@@ -740,7 +785,11 @@ class SnapshotEventNormalizer:
         if not has_rf:
             unavailable.append(
                 self._make_event(
-                    event_id=_stable_id("sensor-unavailable", "rf-receiver"),
+                    event_id=_stable_id(
+                        "sensor-unavailable",
+                        "rf-receiver",
+                        now.isoformat(),
+                    ),
                     event_type=NormalizedEventType.SENSOR_UNAVAILABLE,
                     observed_at=now,
                     received_at=now,
@@ -763,6 +812,7 @@ class SnapshotEventNormalizer:
                             explanation_ru="Синтетическое состояние RF-слоя.",
                         ),
                     ),
+                    episode_id="sensor-unavailable:rf-receiver",
                     tags=("sensor", "unavailable", "rf"),
                 )
             )
@@ -777,6 +827,7 @@ class SnapshotEventNormalizer:
                     event_id=_stable_id(
                         "sensor-unavailable",
                         "direction-finder",
+                        now.isoformat(),
                     ),
                     event_type=NormalizedEventType.SENSOR_UNAVAILABLE,
                     observed_at=now,
@@ -800,6 +851,7 @@ class SnapshotEventNormalizer:
                             explanation_ru="Состояние пеленгационного слоя.",
                         ),
                     ),
+                    episode_id="sensor-unavailable:direction-finder",
                     tags=("sensor", "unavailable", "direction"),
                 )
             )
@@ -937,6 +989,24 @@ def _rf_family_ru(family: RfFamily) -> str:
         RfFamily.WIDEBAND_OR_INTERFERENCE: "широкополосная форма или помеха",
         RfFamily.IMPULSE_OR_LOCAL_INTERFERENCE: "импульс или локальная помеха",
     }[family]
+
+
+def _rf_lifecycle_ru(lifecycle: DecisionLifecycle) -> str:
+    return {
+        DecisionLifecycle.IDLE: (
+            "изменение замечено, но ниже порога temporal-кандидата"
+        ),
+        DecisionLifecycle.CANDIDATE: "неподтверждённый temporal-кандидат",
+        DecisionLifecycle.CONFIRMED: "устойчивый RF-эпизод",
+        DecisionLifecycle.HOLDING: "RF-эпизод на выдержке release-hold",
+        DecisionLifecycle.RESOLVED: "RF-эпизод завершён",
+        DecisionLifecycle.SUPPRESSED: (
+            "одиночное или шумоподобное наблюдение без подтверждения"
+        ),
+        DecisionLifecycle.DATA_HOLD: (
+            "активность замечена при ограниченном качестве данных"
+        ),
+    }[lifecycle]
 
 
 def _acoustic_family_ru(family: AcousticFamily) -> str:

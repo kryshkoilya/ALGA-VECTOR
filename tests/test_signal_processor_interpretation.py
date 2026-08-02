@@ -39,13 +39,17 @@ def _event(
     severity: EventSeverity,
     valid_until: datetime | None = None,
     direction: DirectionEstimate | None = None,
+    event_id: str | None = None,
+    observed_at: datetime = NOW,
+    received_at: datetime | None = None,
+    episode_id: str | None = None,
 ) -> NormalizedEvent:
     return NormalizedEvent(
         schema_version="1.0",
-        event_id=event_type.value,
+        event_id=event_id or event_type.value,
         event_type=event_type,
-        observed_at=NOW,
-        received_at=NOW,
+        observed_at=observed_at,
+        received_at=received_at or observed_at,
         valid_until=valid_until,
         severity=severity,
         confidence=ConfidenceScore.heuristic(
@@ -73,6 +77,7 @@ def _event(
             ),
         ),
         direction=direction,
+        episode_id=episode_id,
     )
 
 
@@ -134,12 +139,14 @@ def test_activity_uses_fresh_external_direction_and_explains_no_range() -> None:
                 NormalizedEventType.RADIO_ACTIVITY_DETECTED,
                 severity=EventSeverity.WARNING,
                 valid_until=NOW + timedelta(seconds=5),
+                episode_id="rf-episode",
             ),
             _event(
                 NormalizedEventType.DIRECTION_ESTIMATED,
                 severity=EventSeverity.NOTICE,
                 valid_until=NOW + timedelta(seconds=3),
                 direction=direction,
+                episode_id="rf-episode",
             ),
         ),
         (
@@ -178,6 +185,172 @@ def test_missing_direction_has_explicit_fallback_message() -> None:
 
     assert "Пеленгация недоступна" in situation.direction_ru
     assert "KrakenSDR" in situation.direction_ru
+
+
+def test_standalone_direction_is_context_not_probable_activity() -> None:
+    direction = DirectionEstimate(
+        bearing_deg=108.0,
+        uncertainty_deg=12.0,
+        source_id="kraken",
+        observed_at=NOW,
+        valid_until=NOW + timedelta(seconds=3),
+        confidence=0.8,
+        validated_external=True,
+        calibration_id="cal-1",
+    )
+    event = _event(
+        NormalizedEventType.DIRECTION_ESTIMATED,
+        severity=EventSeverity.NOTICE,
+        valid_until=NOW + timedelta(seconds=3),
+        direction=direction,
+    )
+
+    situation = HumanReadableInterpreter().interpret(
+        (event,),
+        (
+            _sensor(
+                SensorKind.DIRECTION_FINDER,
+                SensorAvailability.AVAILABLE,
+                "kraken",
+            ),
+        ),
+        now=NOW,
+    )
+
+    assert situation.mode is OperatorSituationMode.BACKGROUND
+    assert situation.primary_event is event
+    assert situation.direction is None
+
+
+def test_direction_from_another_episode_is_not_attached_to_primary() -> None:
+    direction = DirectionEstimate(
+        bearing_deg=211.0,
+        uncertainty_deg=7.0,
+        source_id="kraken",
+        observed_at=NOW,
+        valid_until=NOW + timedelta(seconds=3),
+        confidence=0.9,
+        validated_external=True,
+        calibration_id="cal-cross-episode",
+    )
+    rf_event = _event(
+        NormalizedEventType.RADIO_ACTIVITY_DETECTED,
+        severity=EventSeverity.WARNING,
+        valid_until=NOW + timedelta(seconds=5),
+        episode_id="rf-episode",
+    )
+    direction_event = _event(
+        NormalizedEventType.DIRECTION_ESTIMATED,
+        severity=EventSeverity.NOTICE,
+        valid_until=NOW + timedelta(seconds=3),
+        direction=direction,
+        episode_id="other-episode",
+    )
+
+    situation = HumanReadableInterpreter().interpret(
+        (rf_event, direction_event),
+        (
+            _sensor(
+                SensorKind.DIRECTION_FINDER,
+                SensorAvailability.AVAILABLE,
+                "kraken",
+            ),
+        ),
+        now=NOW,
+    )
+
+    assert situation.primary_event is rf_event
+    assert situation.direction is None
+    assert "211" not in situation.direction_ru
+    assert direction_event in situation.recent_events
+
+
+def test_critical_direction_context_cannot_mask_semantic_rf_activity() -> None:
+    direction = DirectionEstimate(
+        bearing_deg=108.0,
+        uncertainty_deg=12.0,
+        source_id="kraken",
+        observed_at=NOW,
+        valid_until=NOW + timedelta(seconds=3),
+        confidence=0.8,
+        validated_external=True,
+        calibration_id="cal-priority",
+    )
+    rf_event = _event(
+        NormalizedEventType.RADIO_ACTIVITY_DETECTED,
+        severity=EventSeverity.WARNING,
+        valid_until=NOW + timedelta(seconds=5),
+        episode_id="shared-episode",
+    )
+    direction_event = _event(
+        NormalizedEventType.DIRECTION_ESTIMATED,
+        severity=EventSeverity.CRITICAL,
+        valid_until=NOW + timedelta(seconds=3),
+        direction=direction,
+        episode_id="shared-episode",
+    )
+
+    situation = HumanReadableInterpreter().interpret(
+        (rf_event, direction_event),
+        (),
+        now=NOW,
+    )
+
+    assert situation.primary_event is rf_event
+    assert situation.mode is OperatorSituationMode.ACTIVITY
+    assert situation.direction is direction
+
+
+def test_newer_expired_timeline_entries_cannot_truncate_active_primary() -> None:
+    active = _event(
+        NormalizedEventType.RADIO_ACTIVITY_DETECTED,
+        severity=EventSeverity.WARNING,
+        valid_until=NOW + timedelta(seconds=60),
+        event_id="active-rf",
+        episode_id="active-episode",
+    )
+    expired = tuple(
+        _event(
+            NormalizedEventType.NOISE_BACKGROUND,
+            severity=EventSeverity.INFO,
+            observed_at=NOW + timedelta(seconds=index),
+            valid_until=NOW + timedelta(seconds=index + 1),
+            event_id=f"expired-{index}",
+        )
+        for index in range(1, 7)
+    )
+
+    situation = HumanReadableInterpreter(recent_event_limit=3).interpret(
+        (active, *expired),
+        (),
+        now=NOW + timedelta(seconds=10),
+    )
+
+    assert situation.primary_event is active
+    assert situation.mode is OperatorSituationMode.ACTIVITY
+    assert active not in situation.recent_events
+    assert len(situation.recent_events) == 3
+
+
+def test_important_only_filters_timeline_without_changing_primary() -> None:
+    activity = _event(
+        NormalizedEventType.RADIO_ACTIVITY_DETECTED,
+        severity=EventSeverity.INFO,
+        valid_until=NOW + timedelta(seconds=5),
+        episode_id="non-important-activity",
+    )
+
+    situation = HumanReadableInterpreter().interpret(
+        (activity,),
+        (),
+        now=NOW,
+        important_only=True,
+    )
+
+    assert activity.is_important is False
+    assert situation.primary_event is activity
+    assert situation.mode is OperatorSituationMode.ACTIVITY
+    assert situation.recent_events == ()
 
 
 def test_expired_high_priority_event_does_not_remain_primary() -> None:

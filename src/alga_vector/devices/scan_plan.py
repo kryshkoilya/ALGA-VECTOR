@@ -86,6 +86,47 @@ class ScanPlanPreset:
 # deliberately independent of country, operator, platform or intended use.
 GENERAL_SCAN_PRESETS: tuple[ScanPlanPreset, ...] = (
     ScanPlanPreset(
+        preset_id="field_priority",
+        label_ru="Полевой приоритет · общая RF-активность",
+        note_ru=(
+            "Компактный циклический обзор общих RF-участков. "
+            "Частота сама по себе не определяет тип источника; "
+            "это приоритетный, а не сплошной обзор."
+        ),
+        ranges=(
+            ScanRange(
+                "field_433",
+                "433 МГц · общая RF-активность",
+                433_050_000,
+                434_790_000,
+            ),
+            ScanRange(
+                "field_863_870",
+                "863–870 МГц · общая RF-активность",
+                863_000_000,
+                870_000_000,
+            ),
+            ScanRange(
+                "field_902_928",
+                "902–928 МГц · общая RF-активность",
+                902_000_000,
+                928_000_000,
+            ),
+            ScanRange(
+                "field_2400",
+                "2,4 ГГц · общая RF-активность",
+                2_400_000_000,
+                2_483_500_000,
+            ),
+            ScanRange(
+                "field_5800",
+                "5,8 ГГц · приоритетная RF-активность",
+                5_725_000_000,
+                5_850_000_000,
+            ),
+        ),
+    ),
+    ScanPlanPreset(
         preset_id="general_vhf",
         label_ru="Общий обзор VHF · 30–300 МГц",
         note_ru="Широкий обзор участка спектра без предположения об источнике.",

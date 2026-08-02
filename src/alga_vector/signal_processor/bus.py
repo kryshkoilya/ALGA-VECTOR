@@ -30,6 +30,19 @@ class PublishResult:
     duplicate: bool
     delivery_failures: int
     retained_in_history: bool
+    reason_code: str = "EVENT.ACCEPTED"
+    trace_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EventBusDiagnostics:
+    """Monotonic counters explaining every event-bus disposition."""
+
+    attempted: int
+    accepted: int
+    duplicates: int
+    delivery_failures: int
+    history_not_retained: int
 
 
 class UnifiedEventBus:
@@ -59,6 +72,11 @@ class UnifiedEventBus:
         self._recent_keys: dict[str, float] = {}
         self._subscribers: dict[str, Subscriber] = {}
         self._sequence = 0
+        self._attempted = 0
+        self._accepted = 0
+        self._duplicates = 0
+        self._delivery_failures = 0
+        self._history_not_retained = 0
         self._lock = RLock()
 
     @property
@@ -81,6 +99,7 @@ class UnifiedEventBus:
         now = self._monotonic_clock()
         key = event.deduplication_key
         with self._lock:
+            self._attempted += 1
             self._prune_dedup_locked(now)
             previous = self._recent_keys.get(key)
             if (
@@ -89,18 +108,24 @@ class UnifiedEventBus:
                 previous is not None
                 and now - previous <= self._dedup_window_seconds
             ):
+                self._duplicates += 1
                 return PublishResult(
                     accepted=False,
                     sequence=None,
                     duplicate=True,
                     delivery_failures=0,
                     retained_in_history=False,
+                    reason_code="EVENT.DEDUPLICATED",
+                    trace_id=event.event_id,
                 )
             self._recent_keys[key] = now
             self._trim_dedup_locked()
             self._sequence += 1
             sequence = self._sequence
             retained = self._retain_locked(sequence, event)
+            self._accepted += 1
+            if not retained:
+                self._history_not_retained += 1
             subscribers = tuple(self._subscribers.values())
 
         failures = 0
@@ -109,12 +134,24 @@ class UnifiedEventBus:
                 callback(event)
             except Exception:
                 failures += 1
+        if failures:
+            with self._lock:
+                self._delivery_failures += failures
+        reason_code = (
+            "EVENT.SUBSCRIBER_DELIVERY_FAILED"
+            if failures
+            else "EVENT.HISTORY_CAPACITY_NOT_RETAINED"
+            if not retained
+            else "EVENT.ACCEPTED"
+        )
         return PublishResult(
             accepted=True,
             sequence=sequence,
             duplicate=False,
             delivery_failures=failures,
             retained_in_history=retained,
+            reason_code=reason_code,
+            trace_id=event.event_id,
         )
 
     def recent(
@@ -154,6 +191,19 @@ class UnifiedEventBus:
 
         with self._lock:
             return len(self._recent_keys)
+
+    @property
+    def diagnostics(self) -> EventBusDiagnostics:
+        """Return a consistent snapshot for logs and the expert UI."""
+
+        with self._lock:
+            return EventBusDiagnostics(
+                attempted=self._attempted,
+                accepted=self._accepted,
+                duplicates=self._duplicates,
+                delivery_failures=self._delivery_failures,
+                history_not_retained=self._history_not_retained,
+            )
 
     def _prune_dedup_locked(self, now: float) -> None:
         if not self._recent_keys:
@@ -198,4 +248,9 @@ class UnifiedEventBus:
         return True
 
 
-__all__ = ["PublishResult", "Subscriber", "UnifiedEventBus"]
+__all__ = [
+    "EventBusDiagnostics",
+    "PublishResult",
+    "Subscriber",
+    "UnifiedEventBus",
+]

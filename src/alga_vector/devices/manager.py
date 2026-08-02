@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from threading import RLock
 from typing import Protocol
@@ -68,6 +68,10 @@ class DeviceManager:
         self._adapters = adapter_tuple
         self._snapshots: dict[str, DeviceSnapshot] = {}
         self._generations: dict[str, int] = {}
+        self._last_captures: dict[str, SpectrumFrame] = {}
+        self._capture_active: set[str] = set()
+        self._capture_successes: dict[str, int] = {}
+        self._capture_failures: dict[str, int] = {}
         self._closed = False
         self._lock = RLock()
 
@@ -87,7 +91,13 @@ class DeviceManager:
                 try:
                     current = adapter.inspect()
                 except AppError as exc:
-                    current = _failed_snapshot(adapter, exc.code, exc.message_ru, exc.operator_action_ru)
+                    current = _failed_snapshot(
+                        adapter,
+                        exc.code,
+                        exc.message_ru,
+                        exc.operator_action_ru,
+                        technical_context=exc.technical_details,
+                    )
                 except Exception as exc:  # defensive isolation at the adapter boundary
                     current = _failed_snapshot(
                         adapter,
@@ -96,6 +106,7 @@ class DeviceManager:
                         "Откройте диагностику устройства.",
                         technical_error=f"{type(exc).__name__}: {exc}",
                     )
+                current = self._with_capture_telemetry(adapter, current)
                 previous = self._snapshots.get(current.device_id)
                 generation = self._generations.get(current.device_id, current.generation)
                 if previous is None:
@@ -159,6 +170,7 @@ class DeviceManager:
                                 exc.code,
                                 exc.message_ru,
                                 exc.operator_action_ru,
+                                technical_context=exc.technical_details,
                             ),
                         )
                         continue
@@ -185,6 +197,7 @@ class DeviceManager:
                         )
                         continue
                     if frame is not None:
+                        self._record_read_success(adapter, frame)
                         return frame
             if last_failure is not None:
                 raise last_failure
@@ -198,6 +211,11 @@ class DeviceManager:
         """Store one new read-failure episode without resetting generation."""
 
         previous = self._snapshots.get(adapter.adapter_id)
+        self._capture_active.discard(adapter.adapter_id)
+        self._capture_failures[adapter.adapter_id] = (
+            self._capture_failures.get(adapter.adapter_id, 0) + 1
+        )
+        failed = self._with_capture_telemetry(adapter, failed)
         generation = max(
             self._generations.get(adapter.adapter_id, 0),
             previous.generation if previous is not None else 0,
@@ -207,6 +225,88 @@ class DeviceManager:
         self._snapshots[adapter.adapter_id] = replace(
             failed,
             generation=generation,
+        )
+
+    def _record_read_success(
+        self,
+        adapter: DeviceAdapter,
+        frame: SpectrumFrame,
+    ) -> None:
+        """Publish proof of one completed capture into the device snapshot."""
+
+        device_id = adapter.adapter_id
+        self._last_captures[device_id] = frame
+        self._capture_active.add(device_id)
+        self._capture_successes[device_id] = (
+            self._capture_successes.get(device_id, 0) + 1
+        )
+        current = self._snapshots.get(device_id)
+        if current is None:
+            current = DeviceSnapshot(
+                device_id=device_id,
+                display_name=adapter.display_name,
+                kind=adapter.kind,
+                connection=adapter.connection,
+                state=DeviceState.READY,
+                health=HealthLevel.HEALTHY,
+                capabilities=adapter.capabilities,
+            )
+        previous_state = current.state
+        updated = self._with_capture_telemetry(adapter, current)
+        generation = self._generations.get(device_id, updated.generation)
+        if previous_state != updated.state:
+            generation += 1
+        self._generations[device_id] = generation
+        self._snapshots[device_id] = replace(updated, generation=generation)
+
+    def _with_capture_telemetry(
+        self,
+        adapter: DeviceAdapter,
+        snapshot: DeviceSnapshot,
+    ) -> DeviceSnapshot:
+        """Merge bounded capture evidence without performing hardware I/O."""
+
+        device_id = adapter.adapter_id
+        frame = self._last_captures.get(device_id)
+        metrics = dict(snapshot.metrics)
+        metrics.update(adapter.capture_metrics())
+        successes = self._capture_successes.get(device_id, 0)
+        failures = self._capture_failures.get(device_id, 0)
+        metrics.update(
+            {
+                "capture_success_count": successes,
+                "capture_failure_count": failures,
+                "capture_confirmed": int(frame is not None),
+                "capture_active": int(device_id in self._capture_active),
+            }
+        )
+        if frame is None:
+            return replace(snapshot, metrics=metrics)
+        metrics.update(
+            {
+                "last_capture_sequence": frame.sequence,
+                "last_capture_source_id": frame.source_id,
+                "capture_source_matches_adapter": int(
+                    frame.source_id == device_id
+                ),
+                "last_capture_bins": int(frame.power_dbm.size),
+                "last_capture_peak_level": frame.peak_level,
+                "last_capture_unit": frame.unit,
+                "last_capture_provenance": frame.provenance.value,
+                "last_capture_span_hz": frame.span_hz,
+            }
+        )
+        active = (
+            device_id in self._capture_active
+            and snapshot.state in _OPERABLE_STATES
+            and snapshot.health != HealthLevel.ERROR
+        )
+        return replace(
+            snapshot,
+            state=DeviceState.STREAMING if active else snapshot.state,
+            center_frequency_hz=frame.center_frequency_hz,
+            last_data_at=frame.captured_at,
+            metrics=metrics,
         )
 
     def reconnect(self, device_id: str) -> DeviceSnapshot:
@@ -226,6 +326,7 @@ class DeviceManager:
                     retryable=False,
                     technical_details={"device_id": device_id},
                 )
+            self._capture_active.discard(device_id)
             try:
                 current = adapter.reconnect()
             except AppError as exc:
@@ -234,6 +335,7 @@ class DeviceManager:
                     exc.code,
                     exc.message_ru,
                     exc.operator_action_ru,
+                    technical_context=exc.technical_details,
                 )
             except Exception as exc:
                 current = _failed_snapshot(
@@ -243,6 +345,7 @@ class DeviceManager:
                     "Проверьте кабель, драйвер и повторите действие.",
                     technical_error=f"{type(exc).__name__}: {exc}",
                 )
+            current = self._with_capture_telemetry(adapter, current)
             previous = self._snapshots.get(device_id)
             generation = self._generations.get(device_id, 0)
             if previous is None or previous.state != current.state:
@@ -348,10 +451,23 @@ def _failed_snapshot(
     action_ru: str,
     *,
     technical_error: str | None = None,
+    technical_context: Mapping[str, object] | None = None,
 ) -> DeviceSnapshot:
     metrics: dict[str, float | int | str] = {}
     if technical_error is not None:
         metrics["technical_error"] = technical_error
+    if technical_context is not None:
+        safe_keys = {
+            "descriptor_count",
+            "device_index",
+            "error_type",
+            "failure_class",
+            "os_error_code",
+        }
+        for key in safe_keys:
+            value = technical_context.get(key)
+            if isinstance(value, (float, int, str)) and not isinstance(value, bool):
+                metrics[key] = value
     return DeviceSnapshot(
         device_id=adapter.adapter_id,
         display_name=adapter.display_name,

@@ -5,6 +5,11 @@
 Продукт: **ALGA VECTOR**  
 Подпись: **Разработал: Буйвол и Задира**
 
+> **Исторический контракт 0.7.0.** Документ сохранён для трассируемости и не
+> является текущим runtime/UI contract. Актуальная target-centric архитектура
+> 1.0.0rc1 описана в
+> [`ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md).
+
 ## Результат
 
 ALGA VECTOR остаётся одним Windows-приложением и одним backend, но получает два
@@ -38,10 +43,10 @@ UI больше не определяет класс события из час�
 - `LIKELY_HANDHELD_RADIO`, `LIKELY_VIDEO_LINK` и `LIKELY_DRONE_SIGNATURE`
   разрешены только при наличии валидированного классификатора и трассируемых
   evidence; обычный спектральный эвристический pipeline выдаёт общий RF-класс.
-- `TARGET_CONFIRMED` разрешён только после независимого подтверждения: оператором
-  по разрешённому каналу, камерой/оптическим классификатором с валидированной
-  моделью либо другим явно авторизованным внешним классификатором. Частота,
-  уровень сигнала или один сенсор не подтверждают цель.
+- `TARGET_CONFIRMED` разрешён только при `ValidatedIdentityEvidence` и минимум
+  двух свежих, явно атрибутированных независимых физических подтверждениях из
+  acoustic, passive radar или camera. RF, direction, classifier output и
+  действие оператора сами по себе цель не подтверждают.
 - Число RSSI/уровень спектра не преобразуется в расстояние. На экране нет
   «2,4 км», «приближается» или координаты источника без отдельного
   калиброванного метода измерения дальности.
@@ -428,8 +433,10 @@ SensorState(
 
 SIMPLE MODE выводит, например, `Сектор 95–120°`, только если это следует из
 валидного угла и uncertainty. При отсутствии подтверждённого DF вывод:
-`Пеленгация недоступна: KrakenSDR не подключён`. Никакой псевдопеленгации по
-RSSI, одной антенне или положению пика спектра нет.
+`Пеленгация недоступна: нет свежего валидированного внешнего DF-наблюдения`.
+Источник может отсутствовать, быть stale, не пройти quality gate или иметь
+невалидную калибровку. Конкретный KrakenSDR adapter в поставку не входит.
+Никакой псевдопеленгации по RSSI, одной антенне или положению пика спектра нет.
 
 Ручной и simulated bearing остаются в существующих expert-контрактах
 `direction/`, но не могут быть сконструированы как `DirectionEstimate` для
@@ -443,12 +450,12 @@ RSSI, одной антенне или положению пика спектр�
 | `RADIO_ACTIVITY_DETECTED` | Подтверждённый temporal RF episode | Приписывать физический тип |
 | `LIKELY_HANDHELD_RADIO` | Валидированный classifier + evidence chain | Mapping `voice_like → рация` |
 | `LIKELY_VIDEO_LINK` | Валидированный classifier/protocol evidence | Mapping «частота около 5.8 ГГц → видео» |
-| `LIKELY_DRONE_SIGNATURE` | Версионированный независимый classifier | Любая частотная таблица как доказательство |
+| `LIKELY_DRONE_SIGNATURE` | `ValidatedIdentityEvidence` + classifier attribution + минимум одно независимое non-RF physical confirmation | Classifier без physical confirmation или любая частотная таблица как доказательство |
 | `ADSB_CONTACT` | Свежий корректно разобранный cooperative broadcast | Считать IFF или полной обстановкой |
 | `ACOUSTIC_ANOMALY` | Валидные PCM features + temporal persistence | Автоматически называть БПЛА |
 | `DIRECTION_ESTIMATED` | Свежий live external DF + valid calibration | RSSI, manual или stale DF как измерение |
 | `MULTISENSOR_CORRELATED` | Существующий fusion подтвердил временную корреляцию независимых модальностей | Считать корреляцию identity/`TARGET_CONFIRMED` |
-| `TARGET_CONFIRMED` | Разрешённое независимое подтверждение/operator action | Один RF/acoustic/DF признак |
+| `TARGET_CONFIRMED` | `ValidatedIdentityEvidence` + classifier attribution + минимум два независимых non-RF physical confirmations | Один sensor, operator action, RF/RSSI, direction или classifier output без физических подтверждений |
 | `SENSOR_UNAVAILABLE` | Health/freshness/capability state | Молча скрывать потерю сенсора |
 
 Built-in `SnapshotEventNormalizer` по определению строит из обычного RF или
@@ -567,7 +574,10 @@ flowchart TD
 
 ```text
 Направление: недоступно
-KrakenSDR или другой валидированный пеленгатор не подключён.
+Нет свежего валидированного внешнего DF-наблюдения.
+Источник может отсутствовать, быть stale, не пройти quality gate
+или иметь невалидную калибровку.
+Конкретный KrakenSDR adapter в поставку не входит.
 RF-наблюдение продолжается; расстояние и положение источника не определены.
 ```
 

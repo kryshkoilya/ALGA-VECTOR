@@ -1,6 +1,6 @@
 """Unified normalized signal/event pipeline for Simple and Expert UI modes."""
 
-from .bus import PublishResult, UnifiedEventBus
+from .bus import EventBusDiagnostics, PublishResult, UnifiedEventBus
 from .interpretation import HumanReadableInterpreter
 from .normalizer import NormalizationResult, SnapshotEventNormalizer
 from .policy import FailClosedEventPolicy, PolicyDecision
@@ -28,6 +28,7 @@ __all__ = [
     "ConfidenceBand",
     "ConfidenceScore",
     "DirectionEstimate",
+    "EventBusDiagnostics",
     "EventPolicyViolation",
     "EventSeverity",
     "EvidenceFact",

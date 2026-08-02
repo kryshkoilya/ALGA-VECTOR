@@ -68,6 +68,17 @@ class DeviceAdapter(ABC):
         self._ensure_open()
         return None
 
+    def capture_metrics(self) -> dict[str, float | int | str]:
+        """Return bounded receiver settings applied to the latest capture.
+
+        This method must not touch hardware.  The device manager uses it only
+        after ``read_spectrum`` has returned successfully so a live-frame
+        snapshot and DEBUG trace can state which receive settings were in
+        effect without opening or probing the receiver a second time.
+        """
+
+        return {}
+
     def close(self) -> None:
         """Release resources. The operation is deliberately idempotent."""
 

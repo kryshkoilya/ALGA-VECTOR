@@ -1,4 +1,4 @@
-# ALGA VECTOR 0.7.0
+# ALGA VECTOR 1.0.0rc2
 
 ALGA VECTOR — русскоязычный offline-first Windows foundation гражданской
 мультисенсорной системы раннего предупреждения. В одном локальном приложении
@@ -8,16 +8,18 @@ fusion-логика.
 
 > Разработал: Буйвол и Задира
 
-![SIMPLE MODE ALGA VECTOR 0.7.0](docs/screenshots/simple-mode-070.png)
+![SIMPLE MODE ALGA VECTOR 1.0.0rc2](docs/screenshots/simple-mode-100rc1.png)
 
 ## GitHub-навигация
 
-- **Скачать:** [GitHub Releases](../../releases)
+- **Скачать:** [GitHub Releases](https://github.com/kryshkoilya/ALGA-VECTOR/releases)
 - **Все версии и SHA-256:** [`VERSIONS.md`](VERSIONS.md)
 - **Полное устройство проекта:** [`docs/GITHUB_PROJECT_OVERVIEW_RU.md`](docs/GITHUB_PROJECT_OVERVIEW_RU.md)
-- **Архитектура SIMPLE/EXPERT:** [`docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md`](docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md)
+- **Историческая архитектура SIMPLE/EXPERT 0.7.0:** [`docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md`](docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md)
+- **Архитектура 1.0:** [`docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)
 - **Журнал разработки с OpenAI Codex:** [`docs/DEVELOPMENT_DIALOG_RU.md`](docs/DEVELOPMENT_DIALOG_RU.md)
 - **Быстрый старт:** [`docs/QUICK_START_RU.txt`](docs/QUICK_START_RU.txt)
+- **Полевой debug RF-тракта:** [`docs/FIELD_DEBUG_RF_PIPELINE_RU.md`](docs/FIELD_DEBUG_RF_PIPELINE_RU.md)
 - **Сторонние компоненты:** [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - **Безопасность:** [`SECURITY.md`](SECURITY.md)
 - **Участие в разработке:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
@@ -30,15 +32,15 @@ fusion-логика.
 > Публикация репозитория не отменяет лицензии сторонних компонентов и сама по
 > себе не выдаёт разрешение на повторное распространение кода продукта.
 
-Версия 0.7.0 даёт запускаемый production-foundation с одним backend и двумя
-режимами интерфейса:
+Версия 1.0.0rc2 переводит запускаемый production-foundation в target-centric
+операторскую платформу с одним backend и двумя режимами интерфейса:
 
 ```text
 PySide6 shell → SIMPLE MODE / EXPERT MODE → structured logs
        ↓
 RF + acoustic + civilian ADS-B context + optional validated bearing
        ↓
-quality gates → normalized event bus → human-readable interpretation
+quality gates → normalized events → target aggregator → operator presentation
 ```
 
 Foundation можно запускать локально в Live, Safe и явно маркированном Demo.
@@ -46,7 +48,7 @@ Demo использует детерминированные fake-источни
 реальные измерения. Structured JSONL-логи, диагностика, onboarding и Windows
 PyInstaller/Inno Setup skeleton входят в проект.
 
-Акустический модуль 0.7.0 содержит PCM feature/detection core и fake-source для
+Акустический модуль 1.0.0rc2 содержит PCM feature/detection core и fake-source для
 проверяемого Demo. Bundled live-захват с микрофона и полевая модель конкретного
 физического объекта пока не поставляются. ADS-B-модуль читает локальный
 `dump1090 aircraft.json` как гражданский контекст; отсутствие борта в ADS-B не
@@ -76,8 +78,11 @@ ALGA VECTOR:
 ## Рабочие разделы
 
 - **Простая обстановка** — крупный human-readable статус, объяснение, валидный
-  сектор, сила подтверждения, следующий шаг и важные события;
+  сектор, словесная стадия, следующий шаг, важные события и семь сенсорных
+  статусов;
 - **Обзор** — состояние сенсоров, fusion-итог, объяснение и следующий шаг;
+- **Цели** — экспертный lifecycle, вклад источников, evidence, ограничения и
+  валидированный сектор для каждой объединённой цели;
 - **Устройства** — безопасное обнаружение, явное добавление и диагностика;
 - **Спектр** — live-график, waterfall, capability-driven tuning и
   последовательный автообзор общих диапазонов;
@@ -258,12 +263,19 @@ Temporal FSM использует:
 сигнала. Периодический и voice-like класс требуют достаточной временной
 структуры; один sweep их не подтверждает.
 
-Компактное уведомление появляется только для alertable-решения в состоянии
-`confirmed` или `holding`. Оно описывает общий RF-тип: голосоподобный канал,
-пакетоподобный обмен, несущую, ограниченный узкополосный или широкополосный
-эпизод, шумоподобную помеху либо неподтверждённый источник. Формулировка
-«возможна радиостанция» не является подтверждением рации, а частота и
-RF-форма не являются идентификацией физического объекта.
+Каждое изменение, прошедшее энергетический gate, синхронно попадает в Event Bus
+как `RADIO_ACTIVITY_DETECTED`, даже если temporal FSM или классификатор ещё не
+подтвердили форму. Поэтому SIMPLE MODE показывает «Низкая уверенность:
+неподтверждённая RF-активность», а не молчит до идеального совпадения.
+Alertable-решение по-прежнему требует согласованных кадров в состоянии
+`confirmed` или `holding`. Формулировка «возможна радиостанция» не является
+подтверждением рации, а частота и RF-форма не идентифицируют физический объект.
+
+В Live-профиле с готовым физическим приёмником при первом старте автоматически
+включается компактный аппаратно-ограниченный обзор `field_priority`; последний
+явно выбранный короткий scan plan затем безопасно возобновляется. RTL-SDR
+сканирует только подтверждённые участки ниже 1,766 ГГц. Участки 2,4/5,8 ГГц не
+изображаются измеренными и включаются только для совместимого приёмника.
 
 ## Направление: fail-closed
 
@@ -280,7 +292,7 @@ RF-форма не являются идентификацией физичес�
 Если валидного источника нет, данные устарели, калибровка не совпадает или
 evidence недостаточно, луч скрывается и отображается
 **«Направление недоступно»**. Bundled adapter конкретного внешнего DF-сенсора в
-0.7.0 не поставляется; реализованы модель, policy gate и runtime ingestion API.
+1.0.0rc2 не поставляется; реализованы модель, policy gate и runtime ingestion API.
 
 RF-эпизод сам по себе не создаёт bearing.
 
@@ -294,14 +306,17 @@ RF-эпизод сам по себе не создаёт bearing.
 
 **SIMPLE MODE** (backward-compatible значение профиля `guided`) показывает:
 
-- что измерено;
-- почему система так пишет;
-- насколько надёжны данные словесно;
-- что не удаётся установить;
-- один следующий шаг.
+- общий статус обстановки;
+- не более одной текущей объединённой цели вместо потока разрозненных событий;
+  при её отсутствии — явное состояние «Активная цель не сформирована»;
+- вероятный общий тип наблюдаемой активности;
+- словесную стадию подтверждения без процентов;
+- только свежий валидированный сектор либо честное отсутствие пеленга;
+- один следующий шаг, 3–5 важных событий и готовность семи сенсорных ролей.
 
 **EXPERT MODE** раскрывает частоту, полосу, level, peak excess,
-quality flags, lifecycle, evidence, alternatives и provenance.
+quality flags, lifecycle, evidence, alternatives, provenance и подробный
+target breakdown на отдельной странице «Цели».
 
 Оба режима используют одну измерительную математику и одинаковые защитные
 блокировки.
@@ -312,7 +327,7 @@ Demo при обычном запуске.
 
 ## Конфигурация и совместимость
 
-ALGA VECTOR 0.7.0 использует `schema_version: 5`. Старые профили проходят
+Текущая ветка использует `schema_version: 7`. Старые профили проходят
 последовательную миграцию и strict validation. Новые acoustic, airspace и
 fusion-поля имеют fail-closed defaults: live-источник не открывается без явной
 настройки.
@@ -325,12 +340,15 @@ fusion-поля имеют fail-closed defaults: live-источник не от
 - `tinysa_model`;
 - явный `tinysa_ultra_mode`;
 - проверку всего частотного окна, а не только central frequency;
+- явный полевой preset `spectrum.detection_sensitivity` (`low`, `balanced`,
+  `high`) без изменения семантики классификации;
 - acoustic input mode и локальный путь гражданского ADS-B-контекста;
 - параметры temporal fusion;
+- bounded-параметры target aggregation, dedup, decay, stale и retirement;
 - live/demo/safe provenance;
 - atomic user config и last-known-good fallback.
 
-Поля `map` и `location` остаются в schema v5. Карта доступна только в
+Поля `map` и `location` остаются в schema v7. Карта доступна только в
 EXPERT MODE и сохраняет прежние fail-closed ограничения: локальная база,
 картографические измерения и ручная геометрия не становятся координатами
 RF-источника. SIMPLE MODE эти технические настройки не показывает.
@@ -376,6 +394,9 @@ capture, не меняет частоту и не открывает произ�
 
 # Повторить onboarding
 .\.venv\Scripts\python.exe -m alga_vector --onboarding
+
+# Одноразовый подробный журнал DEVICE → CAPTURE → DETECTOR → EVENT BUS → UI
+.\.venv\Scripts\python.exe -m alga_vector --live --debug
 ```
 
 Для отдельного каталога данных добавьте:
@@ -433,7 +454,7 @@ dist\ALGA VECTOR\README_FIRST_RU.txt
 - без автоматической отправки;
 - без raw IQ, spectrum arrays и legacy coordinate data в support bundle.
 
-## Что не заявляется в 0.7.0
+## Что не заявляется в 1.0.0rc2
 
 - физическая сертификация HackRF, PortaPack, tinySA или RTL-SDR на этом build;
 - bundled live-захват с микрофона и полевая валидация акустической модели;
@@ -455,11 +476,17 @@ dist\ALGA VECTOR\README_FIRST_RU.txt
 ## Документация
 
 - [`docs/QUICK_START_RU.txt`](docs/QUICK_START_RU.txt)
-- [`docs/RELEASE_070_RU.md`](docs/RELEASE_070_RU.md)
-- [`docs/BUILD_REPORT_070_RU.md`](docs/BUILD_REPORT_070_RU.md)
-- [`docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md`](docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md)
-- [`docs/RELEASE_060_RU.md`](docs/RELEASE_060_RU.md) — предыдущий релиз
-- [`docs/ALGA_VECTOR_060_FOUNDATION_RU.md`](docs/ALGA_VECTOR_060_FOUNDATION_RU.md)
+- [`docs/RELEASE_100RC2_RU.md`](docs/RELEASE_100RC2_RU.md)
+- [`docs/BUILD_REPORT_100RC2_RU.md`](docs/BUILD_REPORT_100RC2_RU.md)
+- [`docs/FIELD_DEBUG_RF_PIPELINE_RU.md`](docs/FIELD_DEBUG_RF_PIPELINE_RU.md)
+- [`docs/RELEASE_100RC1_RU.md`](docs/RELEASE_100RC1_RU.md)
+- [`docs/BUILD_REPORT_100RC1_RU.md`](docs/BUILD_REPORT_100RC1_RU.md)
+- [`docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)
+- [`docs/RELEASE_070_RU.md`](docs/RELEASE_070_RU.md) — предыдущий стабильный релиз 0.7.0
+- [`docs/BUILD_REPORT_070_RU.md`](docs/BUILD_REPORT_070_RU.md) — исторический build report 0.7.0
+- [`docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md`](docs/SIMPLE_EXPERT_ARCHITECTURE_RU.md) — исторический контракт 0.7.0
+- [`docs/RELEASE_060_RU.md`](docs/RELEASE_060_RU.md) — исторический релиз 0.6.0
+- [`docs/ALGA_VECTOR_060_FOUNDATION_RU.md`](docs/ALGA_VECTOR_060_FOUNDATION_RU.md) — историческая архитектура 0.6
 - [`docs/RELEASE_050_RU.md`](docs/RELEASE_050_RU.md) — исторический релиз
 - [`docs/ALGA_CIVIL_RF_050_ARCHITECTURE_RU.md`](docs/ALGA_CIVIL_RF_050_ARCHITECTURE_RU.md)
 - [`docs/PRODUCTION_AUDIT_041_RU.md`](docs/PRODUCTION_AUDIT_041_RU.md)

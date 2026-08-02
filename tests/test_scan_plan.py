@@ -44,6 +44,7 @@ def test_general_presets_are_source_neutral_and_have_stable_ids() -> None:
     assert "украин" not in all_text
     assert "всу" not in all_text
     assert {item.preset_id for item in GENERAL_SCAN_PRESETS} == {
+        "field_priority",
         "general_vhf",
         "general_uhf",
         "general_l_band",
@@ -51,6 +52,56 @@ def test_general_presets_are_source_neutral_and_have_stable_ids() -> None:
         "general_c_band",
         "general_wide",
     }
+
+
+def test_field_priority_is_capability_clipped_for_rtlsdr() -> None:
+    request = scan_request_from_preset(
+        "field_priority",
+        window_span_hz=2_400_000,
+        overlap_fraction=0.0,
+        dwell_time_ms=50,
+        maximum_windows=128,
+    )
+    plan = compile_scan_plan(
+        GENERIC_RTLSDR_PROFILE,
+        request,
+        sample_rate_hz=2_400_000,
+    )
+
+    assert plan.accepted
+    assert len(plan.windows) <= 128
+    assert plan.estimated_cycle_ms <= 120_000
+    assert all(
+        window.stop_frequency_hz <= GENERIC_RTLSDR_PROFILE.maximum_frequency_hz
+        for window in plan.windows
+    )
+    assert {item.requested.range_id for item in plan.excluded_ranges} == {
+        "field_2400",
+        "field_5800",
+    }
+
+
+def test_field_priority_includes_high_ranges_only_on_compatible_hackrf() -> None:
+    request = scan_request_from_preset(
+        "field_priority",
+        window_span_hz=2_000_000,
+        overlap_fraction=0.0,
+        dwell_time_ms=50,
+        maximum_windows=128,
+    )
+    plan = compile_scan_plan(
+        HACKRF_ONE_PROFILE,
+        request,
+        sample_rate_hz=2_000_000,
+    )
+
+    assert plan.accepted
+    assert len(plan.windows) <= 128
+    assert plan.estimated_cycle_ms <= 120_000
+    assert not plan.excluded_ranges
+    covered_ids = {item.range_id for item in plan.covered_ranges}
+    assert {"field_2400", "field_5800"}.issubset(covered_ids)
+    assert any(window.center_frequency_hz >= 5_725_000_000 for window in plan.windows)
 
 
 def test_rtlsdr_wide_preset_never_schedules_outside_confirmed_hardware() -> None:

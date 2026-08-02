@@ -4,12 +4,16 @@
 исполняемые артефакты или отдельное release evidence. Он не восстанавливает
 отсутствующую историю догадками.
 
-Актуальная рекомендуемая версия: **0.7.0**.
+Актуальный release candidate: **1.0.0rc2**.
+Актуальная стабильная рекомендуемая версия до завершения аппаратной приёмки:
+**0.7.0**.
 
 ## Сводная таблица
 
 | Версия | Статус | Найденный артефакт/evidence | Главное изменение |
 |---|---|---|---|
+| 1.0.0rc2 | Предварительная | Проверенный portable ZIP, checksum, release/build reports | Восстановленный live RF-тракт, capability-driven startup scan, generic fallback и полевой debug |
+| 1.0.0rc1 | Предварительная | Проверенный portable ZIP, checksum, release/build reports | Target-centric backend, новый SIMPLE MODE, sensor readiness, EXPERT «Цели» |
 | 0.2.1 | Историческая | Legacy portable ZIP, checksum и GUI/CLI с PE version `0.2.1` | Ранний запускаемый Windows-инкремент |
 | 0.3.0 | Историческая | Portable ZIP, checksum, распакованные GUI/CLI, quick start | Live по умолчанию, RTL-SDR discovery, карта/база, novice/expert |
 | 0.4.0 | Историческая | Portable ZIP, checksum, verification report | Hardware worker, config v4, RTL-SDR/tinySA, spectrum/events/map/diagnostics |
@@ -17,10 +21,89 @@
 | 0.5.0 | Историческая | Portable ZIP, checksum, release report | Receive-only RF workflow, HackRF/tinySA capabilities, fail-closed Direction |
 | 0.6.0 | Историческая | Portable ZIP, checksum, release/build reports | Первый запускаемый мультисенсорный foundation |
 | 0.6.1 | Историческая | Portable ZIP, checksum, release/build reports | Последовательный автообзор и объяснимые RF-уведомления |
-| 0.7.0 | Актуальная | Portable ZIP, checksum, release/build reports | Один backend, SIMPLE/EXPERT, нормализованный event bus и operator situation |
+| 0.7.0 | Стабильная рекомендуемая до аппаратной приёмки RC | Portable ZIP, checksum, release/build reports | Один backend, SIMPLE/EXPERT, нормализованный event bus и operator situation |
 
 В доступном дереве **не найдено** артефакта, version metadata или release
 evidence для `0.3.1`. Поэтому такая версия не включена в список выпущенных.
+
+## 1.0.0rc2 — восстановление полевого RF-тракта
+
+Дата кандидата: 2 августа 2026 года.
+
+Главное:
+
+- аппаратный статус `STREAMING` появляется только после принятого кадра;
+- startup incident и reason code объясняют конкретный отказ открытия RTL-SDR;
+- первый Live-запуск включает bounded `field_priority`, ограниченный реальными
+  возможностями выбранного приёмника;
+- schema обновлена до `schema_version: 7`, добавлен управляемый preset
+  `detection_sensitivity`;
+- каждый energy-gate candidate синхронно попадает в Event Bus как generic
+  `RADIO_ACTIVITY_DETECTED`, даже если classifier не знает форму;
+- SIMPLE MODE больше не скрывает low-confidence generic RF-активность;
+- добавлены сквозные DEBUG-события DEVICE → CAPTURE → DETECTOR → EVENT BUS → UI;
+- RF-only наблюдение по-прежнему не считается идентификацией физического
+  объекта.
+
+Проверенный portable-артефакт:
+
+```text
+ALGA_VECTOR-1.0.0rc2-Windows-x64-onedir.zip
+```
+
+SHA-256:
+
+```text
+C4B1024D7A1AB8D2CBE590004F8C90DE0C2A4BB735360A0A3D3AC7AF73C835AE
+```
+
+Release gate: Ruff PASS, strict Mypy PASS (115 файлов), Pytest PASS
+(559 тестов), source/frozen Live/Safe/Demo smoke PASS, portable extract and
+Safe smoke PASS.
+
+Документы:
+
+- [`docs/RELEASE_100RC2_RU.md`](docs/RELEASE_100RC2_RU.md)
+- [`docs/BUILD_REPORT_100RC2_RU.md`](docs/BUILD_REPORT_100RC2_RU.md)
+- [`docs/FIELD_DEBUG_RF_PIPELINE_RU.md`](docs/FIELD_DEBUG_RF_PIPELINE_RU.md)
+- [`docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)
+
+## 1.0.0rc1 — target-centric operator platform
+
+Дата кандидата: 27 июля 2026 года.
+
+Главное:
+
+- `NormalizedEvent` проецируется в bounded `FusedTarget`;
+- exact/semantic dedup не допускает повторного создания одной цели;
+- корреляция не выполняется только по близости времени;
+- lifecycle цели: `active`, `holding`, `stale`, `tombstoned`;
+- словесные стадии подтверждения заменяют проценты в SIMPLE MODE;
+- SIMPLE MODE стал экраном решения: hero status, цель, сектор, рекомендация,
+  до пяти важных событий и семь статусов готовности;
+- EXPERT MODE получил отдельную страницу «Цели»;
+- runtime snapshot публикует `targets`, `current_target` и `sensor_readiness`;
+- config обновлён до `schema_version: 6`;
+- направление отображается только из свежего валидированного внешнего DF;
+- дальность, координаты и физическая идентичность не выводятся из RF-уровня.
+
+Проверенный локальный portable-артефакт:
+
+```text
+ALGA_VECTOR-1.0.0rc1-Windows-x64-onedir.zip
+```
+
+SHA-256 локального release-gate артефакта:
+
+```text
+C8316F4843F01D4481BEC31EEFCDAFD6191C6B8CC2B58B00C95FEE8AB3A5D2A4
+```
+
+Документы:
+
+- [`docs/RELEASE_100RC1_RU.md`](docs/RELEASE_100RC1_RU.md)
+- [`docs/BUILD_REPORT_100RC1_RU.md`](docs/BUILD_REPORT_100RC1_RU.md)
+- [`docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md`](docs/ALGA_VECTOR_100_PRODUCT_ARCHITECTURE_RU.md)
 
 ## 0.7.0 — SIMPLE MODE / EXPERT MODE
 
@@ -301,10 +384,10 @@ SHA-256:
 `Legacy Windows binaries 0.2.1–0.6.1` с явной пометкой
 `source snapshot unavailable`.
 
-Теги `v0.2.1`–`v0.6.1` на текущем исходном commit не создаются: автоматически
-сгенерированные GitHub source archives тогда ошибочно содержали бы исходники
-0.7.0. Версионный тег `v0.7.0` указывает на настоящий опубликованный source
-snapshot 0.7.0.
+Теги `v0.2.1`–`v0.6.1` не создаются на маркерном или более новом коммите
+исходников: автоматически сгенерированные GitHub source archives содержали бы
+исходники другой версии. Версионный тег `v0.7.0` указывает на настоящий
+опубликованный source snapshot 0.7.0.
 
 ## Общие правила выбора версии
 

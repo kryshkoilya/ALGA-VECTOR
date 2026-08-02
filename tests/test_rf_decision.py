@@ -125,6 +125,51 @@ def test_quiet_background_stays_idle_and_never_alerts() -> None:
     assert update.transition is None
 
 
+def test_sub_attack_activity_is_preserved_as_explainable_unknown_observation() -> None:
+    detector = _detector()
+    engine = RfDecisionEngine()
+    sequence = _warm(detector, engine)
+
+    analysis = detector.analyze(
+        _frame(sequence, _activity(level=-91.0))
+    )
+    update = engine.process(analysis)
+
+    assert analysis.event is not None
+    assert update.decision.lifecycle == DecisionLifecycle.IDLE
+    assert update.decision.family == RfFamily.UNKNOWN
+    assert update.decision.peak_frequency_hz is not None
+    assert update.decision.occupied_bandwidth_hz is not None
+    assert any(
+        item.code == "RF.RAW_ACTIVITY_OBSERVED"
+        and item.measured == analysis.event.event_id
+        for item in update.decision.supporting_evidence
+    )
+    assert any(
+        item.code == "RF.BELOW_ATTACK_THRESHOLD"
+        for item in update.decision.contradicting_evidence
+    )
+
+
+def test_activity_during_baseline_learning_keeps_frequency_and_trace() -> None:
+    detector = _detector()
+    engine = RfDecisionEngine()
+
+    analysis = detector.analyze(_frame(1, _activity()))
+    update = engine.process(analysis)
+
+    assert analysis.event is not None
+    assert update.decision.lifecycle == DecisionLifecycle.DATA_HOLD
+    assert update.decision.peak_frequency_hz is not None
+    assert update.decision.occupied_bandwidth_hz is not None
+    assert update.decision.heuristic_score == analysis.event.confidence
+    assert any(
+        item.code == "RF.RAW_ACTIVITY_OBSERVED"
+        and item.measured == analysis.event.event_id
+        for item in update.decision.supporting_evidence
+    )
+
+
 def test_single_bin_is_suppressed_and_does_not_repeat_transition() -> None:
     detector = _detector()
     engine = RfDecisionEngine()

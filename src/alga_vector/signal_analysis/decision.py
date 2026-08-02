@@ -597,6 +597,7 @@ class RfDecisionEngine:
                 DecisionLifecycle.HOLDING,
             },
         )
+        event = analysis.event
         reason = DecisionEvidence(
             code="RF.DATA_QUALITY_HOLD",
             explanation_ru=(
@@ -605,6 +606,21 @@ class RfDecisionEngine:
             measured=analysis.assessment.reason_code,
             threshold="reliable_observation_required",
         )
+        supporting = (
+            (
+                DecisionEvidence(
+                    code="RF.RAW_ACTIVITY_OBSERVED",
+                    explanation_ru=(
+                        "Энергетический детектор зафиксировал изменение, но "
+                        "качество потока пока не позволяет подтвердить устойчивый эпизод."
+                    ),
+                    measured=event.event_id,
+                    threshold="energy_gate_passed",
+                ),
+            )
+            if event is not None
+            else ()
+        )
         return self._make_decision(
             source_id=source_id,
             observed_at=observed_at,
@@ -612,8 +628,12 @@ class RfDecisionEngine:
             family=track.family if track is not None else RfFamily.UNKNOWN,
             track=track,
             quality=quality,
-            score=track.maximum_score if track is not None else 0.0,
-            supporting=(),
+            score=(
+                track.maximum_score
+                if track is not None
+                else event.confidence if event is not None else 0.0
+            ),
+            supporting=supporting,
             contradicting=(reason,),
             extra_missing=(
                 DecisionEvidence(
@@ -623,6 +643,7 @@ class RfDecisionEngine:
                     ),
                 ),
             ),
+            observation_event=event,
         )
 
     def _suppress_immediately(
@@ -1149,6 +1170,17 @@ class RfDecisionEngine:
                     ),
                 )
             )
+        supporting = (
+            DecisionEvidence(
+                code="RF.RAW_ACTIVITY_OBSERVED",
+                explanation_ru=(
+                    "Энергетический детектор зафиксировал RF-изменение; "
+                    "порог подтверждения temporal-эпизода ещё не достигнут."
+                ),
+                measured=event.event_id,
+                threshold="energy_gate_passed",
+            ),
+        ) if event is not None else ()
         return self._make_decision(
             source_id=analysis.source_id,
             observed_at=observed_at,
@@ -1157,9 +1189,10 @@ class RfDecisionEngine:
             track=None,
             quality=quality,
             score=score,
-            supporting=(),
+            supporting=supporting,
             contradicting=tuple(contradicting),
             extra_missing=tuple(missing),
+            observation_event=event,
         )
 
     def _decision_for_track(
@@ -1318,6 +1351,7 @@ class RfDecisionEngine:
         supporting: tuple[DecisionEvidence, ...],
         contradicting: tuple[DecisionEvidence, ...],
         extra_missing: tuple[DecisionEvidence, ...],
+        observation_event: RfEvent | None = None,
     ) -> RfDecision:
         score = _clamp01(score)
         missing = (
@@ -1349,6 +1383,22 @@ class RfDecisionEngine:
                 DataQuality.HIGH: 1.0,
             }[quality]
         )
+        observation_evidence = (
+            observation_event.evidence
+            if track is None and observation_event is not None
+            else None
+        )
+        observation_limitations = (
+            tuple(
+                DecisionEvidence(
+                    code="RF.FRAME_LIMITATION",
+                    explanation_ru=item,
+                )
+                for item in observation_evidence.limitations
+            )
+            if observation_evidence is not None
+            else ()
+        )
         return RfDecision(
             source_id=source_id,
             observed_at=observed_at,
@@ -1359,10 +1409,18 @@ class RfDecisionEngine:
             started_at=track.started_at if track is not None else None,
             last_active_at=track.last_active_at if track is not None else None,
             peak_frequency_hz=(
-                track.component.center_hz if track is not None else None
+                track.component.center_hz
+                if track is not None
+                else observation_evidence.peak_frequency_hz
+                if observation_evidence is not None
+                else None
             ),
             occupied_bandwidth_hz=(
-                track.component.bandwidth_hz if track is not None else None
+                track.component.bandwidth_hz
+                if track is not None
+                else observation_evidence.occupied_bandwidth_hz
+                if observation_evidence is not None
+                else None
             ),
             heuristic_score=score,
             calibrated_probability=None,
@@ -1387,7 +1445,10 @@ class RfDecisionEngine:
                 ),
             ),
             alternatives=_alternatives_for(family),
-            limitations=_decision_limitations(track),
+            limitations=(
+                *_decision_limitations(track),
+                *observation_limitations,
+            ),
         )
 
     @staticmethod

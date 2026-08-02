@@ -78,6 +78,23 @@ class OperatorSituationMode(StrEnum):
     CONFIRMED_TARGET = "confirmed_target"
 
 
+_OPERATOR_LABELS_RU: Final[dict[NormalizedEventType, str]] = {
+    NormalizedEventType.NOISE_BACKGROUND: "Фон",
+    NormalizedEventType.RADIO_ACTIVITY_DETECTED: "Обнаружена радиоактивность",
+    NormalizedEventType.LIKELY_HANDHELD_RADIO: "Вероятная радиосвязь",
+    NormalizedEventType.LIKELY_VIDEO_LINK: "Вероятный видеоканал",
+    NormalizedEventType.LIKELY_DRONE_SIGNATURE: (
+        "Сигнатура требует независимого подтверждения"
+    ),
+    NormalizedEventType.ADSB_CONTACT: "Гражданский контакт ADS-B",
+    NormalizedEventType.ACOUSTIC_ANOMALY: "Акустическая аномалия",
+    NormalizedEventType.DIRECTION_ESTIMATED: "Получено направление",
+    NormalizedEventType.MULTISENSOR_CORRELATED: "Согласованная активность",
+    NormalizedEventType.TARGET_CONFIRMED: "Подтверждённая цель",
+    NormalizedEventType.SENSOR_UNAVAILABLE: "Сенсор недоступен",
+}
+
+
 _IDENTITY_LIKE_EVENTS: Final = frozenset(
     {
         NormalizedEventType.LIKELY_HANDHELD_RADIO,
@@ -618,6 +635,35 @@ class NormalizedEvent:
         }
 
     @property
+    def technical_label(self) -> str:
+        return self.event_type.value
+
+    @property
+    def trace_id(self) -> str:
+        """Stable correlation id used across bus, logs and UI diagnostics."""
+
+        return self.event_id
+
+    @property
+    def operator_label(self) -> str:
+        return _OPERATOR_LABELS_RU[self.event_type]
+
+    @property
+    def operator_explanation(self) -> str:
+        return self.explanation_ru
+
+    @property
+    def recommended_action_short(self) -> str:
+        first_sentence, separator, _rest = self.recommendation_ru.partition(".")
+        if separator and first_sentence.strip():
+            return f"{first_sentence.strip()}."
+        return self.recommendation_ru
+
+    @property
+    def recommended_action_detailed(self) -> str:
+        return self.recommendation_ru
+
+    @property
     def deduplication_key(self) -> str:
         source_key = ",".join(sorted(item.sensor_id for item in self.sources))
         episode_key = self.episode_id or self.event_id
@@ -633,7 +679,11 @@ class NormalizedEvent:
         return {
             "schema_version": self.schema_version,
             "event_id": self.event_id,
+            "trace_id": self.trace_id,
             "event_type": self.event_type.value,
+            "technical_label": self.technical_label,
+            "operator_label": self.operator_label,
+            "operator_explanation": self.operator_explanation,
             "observed_at": self.observed_at.isoformat(),
             "received_at": self.received_at.isoformat(),
             "valid_until": (
@@ -646,6 +696,8 @@ class NormalizedEvent:
             "summary_ru": self.summary_ru,
             "explanation_ru": self.explanation_ru,
             "recommendation_ru": self.recommendation_ru,
+            "recommended_action_short": self.recommended_action_short,
+            "recommended_action_detailed": self.recommended_action_detailed,
             "sources": [item.to_dict() for item in self.sources],
             "evidence": [item.to_dict() for item in self.evidence],
             "limitations": list(self.limitations),

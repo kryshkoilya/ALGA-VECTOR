@@ -1,4 +1,4 @@
-# Tested dependency constraints for ALGA VECTOR 0.7.0 on CPython 3.12 / Windows x64.
+# Tested dependency constraints for ALGA VECTOR 1.0.0rc1 on CPython 3.12 / Windows x64.
 #
 # Install the project with:
 #   python -m pip install --constraint requirements-lock.txt -e ".[dev,hardware]"

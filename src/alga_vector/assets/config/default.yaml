@@ -1,4 +1,4 @@
-schema_version: 5
+schema_version: 7
 locale: ru
 profile_name: Полевой профиль 01
 mode: live
@@ -15,6 +15,7 @@ spectrum:
   span_hz: 2000000
   sample_rate_hz: 2400000
   threshold_level: -72.4
+  detection_sensitivity: high
 acoustic:
   enabled: false
   source: disabled
@@ -29,6 +30,13 @@ fusion:
   window_seconds: 8.0
   min_consecutive_observations: 3
   hold_seconds: 4.0
+target_tracking:
+  correlation_window_seconds: 12.0
+  deduplication_window_seconds: 4.0
+  decay_half_life_seconds: 18.0
+  stale_after_seconds: 30.0
+  retire_after_seconds: 90.0
+  maximum_active_targets: 64
 map:
   package_path: null
   default_zoom: 12

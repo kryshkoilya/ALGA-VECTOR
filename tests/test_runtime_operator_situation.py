@@ -96,6 +96,10 @@ def test_runtime_snapshot_exposes_one_interpreted_operator_contract(
         assert second.operator_situation.mode.value == "activity"
         assert second.operator_situation.primary_event is not None
         assert second.operator_situation.primary_event.event_id == external.event_id
+        assert second.current_target is not None
+        assert second.current_target in second.targets
+        assert second.sensor_readiness is not None
+        assert len(second.sensor_readiness.sensors) == 7
         assert all(
             item.event_type
             not in {

@@ -56,6 +56,7 @@ def build_context(
     mode_override: RuntimeMode | None = None,
     data_dir_override: Path | None = None,
     network_maps_override: bool | None = None,
+    debug_logging_override: bool = False,
 ) -> BootstrapContext:
     """Load validated configuration and construct the application runtime.
 
@@ -77,6 +78,7 @@ def build_context(
         mode_override=process_mode,
         data_dir_override=data_dir_override,
         network_maps_override=network_maps_override,
+        debug_logging_override=debug_logging_override,
     )
     persisted_base = loaded.config
 
@@ -90,6 +92,7 @@ def build_context(
             mode_overridden=process_mode != "live",
             data_dir_overridden=data_dir_override is not None,
             network_maps_overridden=network_maps_override is not None,
+            debug_logging_overridden=debug_logging_override,
         )
         service.save(persisted)
         persisted_base = persisted
@@ -115,6 +118,7 @@ def _apply_runtime_overrides(
     mode_override: RuntimeMode | None,
     data_dir_override: Path | None,
     network_maps_override: bool | None = None,
+    debug_logging_override: bool = False,
 ) -> AppConfig:
     requested_data_dir = data_dir_override or config.storage.data_dir
     if requested_data_dir.drive and not requested_data_dir.is_absolute():
@@ -141,6 +145,8 @@ def _apply_runtime_overrides(
         # Kept solely for internal backwards-compatibility tests. The desktop
         # CLI exposes no switch that can request this legacy path.
         updates["map"] = config.map.model_copy(update={"network_enabled": True})
+    if debug_logging_override:
+        updates["logging"] = config.logging.model_copy(update={"level": "DEBUG"})
     effective_mode: RuntimeMode = mode_override or "live"
     updates["mode"] = effective_mode
     if effective_mode == "demo":
@@ -212,6 +218,7 @@ def _persistable_config(
     mode_overridden: bool,
     data_dir_overridden: bool,
     network_maps_overridden: bool = False,
+    debug_logging_overridden: bool = False,
 ) -> AppConfig:
     """Remove process-only CLI overrides before writing user configuration."""
 
@@ -226,6 +233,10 @@ def _persistable_config(
     if network_maps_overridden:
         updates["map"] = candidate.map.model_copy(
             update={"network_enabled": base.map.network_enabled}
+        )
+    if debug_logging_overridden:
+        updates["logging"] = candidate.logging.model_copy(
+            update={"level": base.logging.level}
         )
     return candidate.model_copy(update=updates)
 

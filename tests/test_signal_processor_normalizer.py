@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from alga_vector.domain.enums import (
@@ -25,6 +26,7 @@ from alga_vector.signal_processor import (
     SnapshotEventNormalizer,
     UnifiedSignalProcessor,
 )
+from alga_vector.targets import ConfirmationStage, SensorRole
 
 NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 
@@ -132,6 +134,68 @@ def test_generic_rf_decision_never_becomes_identity_event() -> None:
     assert "радиоактивность" not in rf_event.summary_ru
 
 
+def test_idle_unknown_observation_is_not_mislabeled_as_clean_background() -> None:
+    raw_trace = "rf-frame-trace-42"
+    decision = replace(
+        _decision(lifecycle=DecisionLifecycle.IDLE),
+        family=RfFamily.UNKNOWN,
+        family_explanation_ru="Неопределённая RF-форма.",
+        peak_frequency_hz=915_000_000.0,
+        occupied_bandwidth_hz=250_000.0,
+        heuristic_score=0.3,
+        abstained=True,
+        supporting_evidence=(
+            DecisionEvidence(
+                code="RF.RAW_ACTIVITY_OBSERVED",
+                explanation_ru="Энергетический порог кадра пройден.",
+                measured=raw_trace,
+            ),
+        ),
+        contradicting_evidence=(
+            DecisionEvidence(
+                code="RF.BELOW_ATTACK_THRESHOLD",
+                explanation_ru="Порог temporal-кандидата ещё не достигнут.",
+                measured=6.0,
+                threshold=7.0,
+            ),
+        ),
+    )
+
+    result = SnapshotEventNormalizer().normalize(_snapshot(decision))
+    radio = next(
+        event
+        for event in result.events
+        if event.event_type is NormalizedEventType.RADIO_ACTIVITY_DETECTED
+    )
+
+    assert not any(
+        event.event_type is NormalizedEventType.NOISE_BACKGROUND
+        for event in result.events
+    )
+    assert radio.frequency_hz == 915_000_000.0
+    assert {item.code for item in radio.evidence} >= {
+        "RF.RAW_ACTIVITY_OBSERVED",
+        "RF.BELOW_ATTACK_THRESHOLD",
+    }
+    assert any(item.measured == raw_trace for item in radio.evidence)
+
+
+def test_suppressed_observation_remains_generic_activity_not_sensor_failure() -> None:
+    result = SnapshotEventNormalizer().normalize(
+        _snapshot(_decision(lifecycle=DecisionLifecycle.SUPPRESSED))
+    )
+
+    assert any(
+        event.event_type is NormalizedEventType.RADIO_ACTIVITY_DETECTED
+        for event in result.events
+    )
+    assert not any(
+        event.event_type is NormalizedEventType.SENSOR_UNAVAILABLE
+        and event.sources[0].sensor_id == "rtl-1"
+        for event in result.events
+    )
+
+
 def test_activity_without_df_emits_explicit_direction_fallback() -> None:
     result = SnapshotEventNormalizer().normalize(_snapshot(_decision()))
 
@@ -142,6 +206,25 @@ def test_activity_without_df_emits_explicit_direction_fallback() -> None:
         and "Пеленгация" in item.summary_ru
     )
     assert len(fallback) == 1
+
+
+def test_processor_projects_activity_into_one_operator_target() -> None:
+    processor = UnifiedSignalProcessor()
+
+    processor.process_snapshot(_snapshot(_decision()))
+
+    assert len(processor.targets) == 1
+    assert processor.current_target is processor.targets[0]
+    assert processor.current_target.confirmation_stage in {
+        ConfirmationStage.SUSPICIOUS_ACTIVITY,
+        ConfirmationStage.LIKELY_SOURCE,
+    }
+    assert processor.current_target.direction is None
+    assert processor.sensor_readiness is not None
+    assert (
+        processor.sensor_readiness.by_role(SensorRole.RTL_SDR).display_name
+        == "RTL-SDR"
+    )
 
 
 def test_background_has_semantic_deduplication_and_does_not_flood_history() -> None:
@@ -183,6 +266,38 @@ def test_absent_rf_device_does_not_claim_clean_background() -> None:
         item.event_type is NormalizedEventType.SENSOR_UNAVAILABLE
         for item in situation.recent_events
     )
+
+
+def test_repeated_unavailable_state_keeps_immutable_ids_without_flooding() -> None:
+    first_snapshot = SystemSnapshot(
+        revision=1,
+        devices=(),
+        capabilities=(),
+        incidents=(),
+        spectrum=None,
+        mode=Provenance.LIVE,
+        profile_name="test",
+        readiness_percent=0,
+        captured_at=NOW,
+    )
+    processor = UnifiedSignalProcessor()
+
+    processor.process_snapshot(first_snapshot)
+    processor.process_snapshot(
+        replace(
+            first_snapshot,
+            revision=2,
+            captured_at=NOW + timedelta(seconds=1),
+        )
+    )
+
+    unavailable = tuple(
+        event
+        for event in processor.event_bus.recent(limit=20)
+        if event.event_type is NormalizedEventType.SENSOR_UNAVAILABLE
+        and event.sources[0].sensor_id == "rf-receiver"
+    )
+    assert len(unavailable) == 1
 
 
 def test_rf_data_hold_uses_one_stable_operator_episode() -> None:

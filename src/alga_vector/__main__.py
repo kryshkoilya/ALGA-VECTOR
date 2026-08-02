@@ -15,7 +15,7 @@ from pathlib import Path
 
 from alga_vector.bootstrap import RuntimeMode, build_context
 from alga_vector.domain.errors import AppError
-from alga_vector.single_instance import SingleInstanceGuard
+from alga_vector.single_instance import SingleInstanceGuard, isolated_smoke_mutex_name
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,7 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
             "receive-only приёмники"
         ),
     )
-    parser.add_argument("--debug", action="store_true", help="вывести traceback при сбое")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="включить подробный pipeline-лог и вывести traceback при сбое",
+    )
     return parser
 
 
@@ -68,7 +72,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.hardware_preflight:
         return _hardware_preflight()
 
-    with SingleInstanceGuard() as instance:
+    mutex_name = ""
+    if args.headless_smoke and args.data_dir is not None:
+        mutex_name = isolated_smoke_mutex_name(args.data_dir)
+    with SingleInstanceGuard(mutex_name) as instance:
         if not instance.acquired:
             error = RuntimeError("ALGA VECTOR уже запущен для этого пользователя.")
             _report_fatal(error, headless=args.headless_smoke)
@@ -86,6 +93,7 @@ def _run(args: argparse.Namespace) -> int:
             # Smoke/build verification must be deterministic and must never
             # contact the online tile provider.
             network_maps_override=False if args.headless_smoke else None,
+            debug_logging_override=args.debug,
         )
         if context.warning is not None and sys.stderr is not None:
             print(str(context.warning), file=sys.stderr)

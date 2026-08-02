@@ -105,11 +105,21 @@ class SettingsPage(OperatorPage):
         self.minimum_free.setRange(0.5, 10_000.0)
         self.minimum_free.setValue(5.0)
         self.minimum_free.setSuffix(" ГиБ")
+        self.log_level = QComboBox()
+        self.log_level.addItem("INFO · штатная работа", "INFO")
+        self.log_level.addItem("DEBUG · полевой разбор тракта", "DEBUG")
+        self.log_level.addItem("WARNING · только отклонения", "WARNING")
+        self.log_level.addItem("ERROR · только ошибки", "ERROR")
+        self.log_level.setToolTip(
+            "DEBUG записывает этапы device → capture → detector → event bus → UI "
+            "в локальный JSONL-журнал. Используйте его для полевого теста."
+        )
         general_form.addRow("Имя профиля", self.profile_name)
         general_form.addRow("Режим запуска", self.mode)
         general_form.addRow("Каталог данных", path_row)
         general_form.addRow("Хранить записи", self.retention)
         general_form.addRow("Резерв свободного места", self.minimum_free)
+        general_form.addRow("Подробность журнала", self.log_level)
         general.content_layout.addLayout(general_form)
         columns.addWidget(general)
 
@@ -134,6 +144,23 @@ class SettingsPage(OperatorPage):
         self.threshold.setRange(-200.0, 30.0)
         self.threshold.setDecimals(1)
         self.threshold.setValue(-72.4)
+        self.detection_sensitivity = QComboBox()
+        self.detection_sensitivity.addItem(
+            "Высокая · полевой поиск, больше фоновых событий",
+            "high",
+        )
+        self.detection_sensitivity.addItem(
+            "Сбалансированная · штатный компромисс",
+            "balanced",
+        )
+        self.detection_sensitivity.addItem(
+            "Низкая · спокойная среда, меньше ложных событий",
+            "low",
+        )
+        self.detection_sensitivity.setToolTip(
+            "Чувствительность меняет ранний порог RF-аномалии. Она не превращает "
+            "один всплеск в подтверждение типа физического объекта."
+        )
         self.real_adapters = QCheckBox("Разрешить реальные адаптеры")
         self.real_adapters.setToolTip(
             "Включайте только после установки и проверки подписанных драйверов."
@@ -145,6 +172,7 @@ class SettingsPage(OperatorPage):
             "Линия индикации (не порог детекции)",
             self.threshold,
         )
+        receiver_form.addRow("Чувствительность детекции", self.detection_sensitivity)
         receiver_form.addRow("Аппаратные источники", self.real_adapters)
         self.receiver_capability_note = QLabel(
             "Диапазон перестройки, допустимая полоса и частота дискретизации "
@@ -457,10 +485,12 @@ class SettingsPage(OperatorPage):
         self.mode.currentIndexChanged.connect(self._mark_dirty)
         self.retention.valueChanged.connect(self._mark_dirty)
         self.minimum_free.valueChanged.connect(self._mark_dirty)
+        self.log_level.currentIndexChanged.connect(self._mark_dirty)
         self.center_frequency.valueChanged.connect(self._mark_dirty)
         self.span.valueChanged.connect(self._mark_dirty)
         self.sample_rate.valueChanged.connect(self._mark_dirty)
         self.threshold.valueChanged.connect(self._mark_dirty)
+        self.detection_sensitivity.currentIndexChanged.connect(self._mark_dirty)
         self.real_adapters.toggled.connect(self._mark_dirty)
         self.experience.currentIndexChanged.connect(self._mark_dirty)
         self.hardware_kind.currentIndexChanged.connect(self._mark_dirty)
@@ -547,6 +577,13 @@ class SettingsPage(OperatorPage):
             self.retention.setValue(int(attr(storage, "retention_days", 30)))
             self.minimum_free.setValue(float(attr(storage, "minimum_free_gib", 5.0)))
 
+            logging_config = attr(source, "logging")
+            logging_index = self.log_level.findData(
+                str(attr(logging_config, "level", "INFO")).upper()
+            )
+            if logging_index >= 0:
+                self.log_level.setCurrentIndex(logging_index)
+
             devices = attr(source, "devices")
             self.real_adapters.setChecked(
                 bool(attr(devices, "enable_real_adapters", False))
@@ -597,6 +634,11 @@ class SettingsPage(OperatorPage):
                 float(attr(spectrum, "sample_rate_hz", 2_400_000)) / 1_000_000
             )
             self.threshold.setValue(float(attr(spectrum, "threshold_level", -72.4)))
+            sensitivity_index = self.detection_sensitivity.findData(
+                str(attr(spectrum, "detection_sensitivity", "high")).lower()
+            )
+            if sensitivity_index >= 0:
+                self.detection_sensitivity.setCurrentIndex(sensitivity_index)
         finally:
             self._loading = False
         self._dirty = False
@@ -836,6 +878,10 @@ class SettingsPage(OperatorPage):
                 "span_hz": requested_span_hz,
                 "sample_rate_hz": requested_sample_rate_hz,
                 "threshold_level": self.threshold.value(),
+                "detection_sensitivity": self.detection_sensitivity.currentData(),
+            },
+            "logging": {
+                "level": self.log_level.currentData(),
             },
             "ui": {
                 "experience_level": self.experience.currentData(),

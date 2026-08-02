@@ -43,6 +43,11 @@ from .detector import (
     data_unreliable_assessment,
     no_data_assessment,
 )
+from .sensitivity import (
+    DetectionSensitivity,
+    DetectionSensitivityConfigs,
+    configs_for_detection_sensitivity,
+)
 
 __all__ = [
     "RF_FAMILY_EXPLANATIONS_RU",
@@ -59,6 +64,8 @@ __all__ = [
     "DecisionTransition",
     "DecisionTransitionKind",
     "DecisionUpdate",
+    "DetectionSensitivity",
+    "DetectionSensitivityConfigs",
     "DetectorConfig",
     "EventClass",
     "EvidenceStrength",
@@ -78,6 +85,7 @@ __all__ = [
     "SpectrumAcquisitionMode",
     "TemporalDecisionConfig",
     "assessment_with_data_age",
+    "configs_for_detection_sensitivity",
     "data_unreliable_assessment",
     "no_data_assessment",
 ]

@@ -97,6 +97,9 @@ class UnavailableRuntimeSnapshot:
     scan_plan: None = None
     operator_situation: None = None
     normalized_events: tuple[object, ...] = ()
+    targets: tuple[object, ...] = ()
+    current_target: None = None
+    sensor_readiness: None = None
 
 
 def value_of(value: object, default: str = "") -> str:

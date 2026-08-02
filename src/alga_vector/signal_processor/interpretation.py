@@ -39,6 +39,17 @@ _TYPE_RANK = {
     NormalizedEventType.SENSOR_UNAVAILABLE: 20,
     NormalizedEventType.NOISE_BACKGROUND: 10,
 }
+_SEMANTIC_ACTIVITY_TYPES = frozenset(
+    {
+        NormalizedEventType.RADIO_ACTIVITY_DETECTED,
+        NormalizedEventType.LIKELY_HANDHELD_RADIO,
+        NormalizedEventType.LIKELY_VIDEO_LINK,
+        NormalizedEventType.LIKELY_DRONE_SIGNATURE,
+        NormalizedEventType.ACOUSTIC_ANOMALY,
+        NormalizedEventType.MULTISENSOR_CORRELATED,
+        NormalizedEventType.TARGET_CONFIRMED,
+    }
+)
 
 
 class HumanReadableInterpreter:
@@ -57,13 +68,14 @@ class HumanReadableInterpreter:
     ) -> OperatorSituation:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
-        recent = tuple(
+        ordered = tuple(
             sorted(events, key=lambda item: item.received_at, reverse=True)
         )
+        active = tuple(item for item in ordered if item.is_active_at(now))
+        recent = ordered
         if important_only:
             recent = tuple(item for item in recent if item.is_important)
         recent = recent[: self._recent_event_limit]
-        active = tuple(item for item in recent if item.is_active_at(now))
         primary = (
             max(active, key=self._priority_key)
             if active
@@ -73,7 +85,7 @@ class HumanReadableInterpreter:
             return self._quiet_or_limited(sensors, recent, now)
 
         mode = self._mode_for(primary)
-        direction = self._best_direction(active, now)
+        direction = self._best_direction(active, primary, now)
         direction_ru = self._direction_text(direction, sensors)
         limitations = tuple(
             dict.fromkeys(
@@ -99,8 +111,11 @@ class HumanReadableInterpreter:
         )
 
     @staticmethod
-    def _priority_key(event: NormalizedEvent) -> tuple[int, int, datetime]:
+    def _priority_key(
+        event: NormalizedEvent,
+    ) -> tuple[int, int, int, datetime]:
         return (
+            1 if event.event_type in _SEMANTIC_ACTIVITY_TYPES else 0,
             _SEVERITY_RANK[event.severity],
             _TYPE_RANK[event.event_type],
             event.received_at,
@@ -110,7 +125,10 @@ class HumanReadableInterpreter:
     def _mode_for(event: NormalizedEvent) -> OperatorSituationMode:
         if event.event_type is NormalizedEventType.TARGET_CONFIRMED:
             return OperatorSituationMode.CONFIRMED_TARGET
-        if event.event_type is NormalizedEventType.NOISE_BACKGROUND:
+        if event.event_type in {
+            NormalizedEventType.NOISE_BACKGROUND,
+            NormalizedEventType.DIRECTION_ESTIMATED,
+        }:
             return OperatorSituationMode.BACKGROUND
         if event.event_type is NormalizedEventType.SENSOR_UNAVAILABLE:
             return OperatorSituationMode.SILENCE
@@ -119,12 +137,20 @@ class HumanReadableInterpreter:
     @staticmethod
     def _best_direction(
         events: tuple[NormalizedEvent, ...],
+        primary: NormalizedEvent,
         now: datetime,
     ) -> DirectionEstimate | None:
+        if (
+            primary.event_type not in _SEMANTIC_ACTIVITY_TYPES
+            or primary.episode_id is None
+        ):
+            return None
         candidates = tuple(
             item.direction
             for item in events
-            if item.direction is not None and item.direction.is_fresh_at(now)
+            if item.episode_id == primary.episode_id
+            and item.direction is not None
+            and item.direction.is_fresh_at(now)
         )
         if not candidates:
             return None

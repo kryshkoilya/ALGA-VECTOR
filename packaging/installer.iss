@@ -1,5 +1,5 @@
 #define MyAppName "ALGA VECTOR"
-#define MyAppVersion "0.7.0"
+#define MyAppVersion "1.0.0rc2"
 #define MyAppPublisher "Буйвол и Задира"
 #define MyAppExeName "ALGA VECTOR.exe"
 
@@ -7,6 +7,7 @@
 AppId={{89534FD7-10A1-40F9-BDC0-5387F11123A1}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion=1.0.0.0
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\ALGA VECTOR
 DefaultGroupName=ALGA VECTOR

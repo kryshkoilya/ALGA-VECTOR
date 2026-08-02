@@ -3,15 +3,41 @@
 from __future__ import annotations
 
 from datetime import datetime
+from threading import RLock
 
 from alga_vector.domain.models import SystemSnapshot
+from alga_vector.signal_analysis import RfDecision
+from alga_vector.targets import (
+    FusedTarget,
+    SensorReadinessInterpreter,
+    SensorReadinessSnapshot,
+    TargetAggregator,
+)
 
 from .bus import PublishResult, UnifiedEventBus
 from .interpretation import HumanReadableInterpreter
 from .normalizer import SnapshotEventNormalizer
 from .policy import FailClosedEventPolicy
 from .recommendations import RecommendationEngine
-from .schema import NormalizedEvent, OperatorSituation, SensorState
+from .schema import (
+    NormalizedEvent,
+    NormalizedEventType,
+    OperatorSituation,
+    SensorState,
+)
+
+_TARGET_EVENT_TYPES = frozenset(
+    {
+        NormalizedEventType.RADIO_ACTIVITY_DETECTED,
+        NormalizedEventType.LIKELY_HANDHELD_RADIO,
+        NormalizedEventType.LIKELY_VIDEO_LINK,
+        NormalizedEventType.LIKELY_DRONE_SIGNATURE,
+        NormalizedEventType.ACOUSTIC_ANOMALY,
+        NormalizedEventType.DIRECTION_ESTIMATED,
+        NormalizedEventType.MULTISENSOR_CORRELATED,
+        NormalizedEventType.TARGET_CONFIRMED,
+    }
+)
 
 
 class UnifiedSignalProcessor:
@@ -25,6 +51,8 @@ class UnifiedSignalProcessor:
         interpreter: HumanReadableInterpreter | None = None,
         recommendation_engine: RecommendationEngine | None = None,
         policy: FailClosedEventPolicy | None = None,
+        target_aggregator: TargetAggregator | None = None,
+        readiness_interpreter: SensorReadinessInterpreter | None = None,
         history_limit: int = 64,
     ) -> None:
         if history_limit < 1:
@@ -41,13 +69,55 @@ class UnifiedSignalProcessor:
         self._policy = policy or FailClosedEventPolicy()
         self._history_limit = history_limit
         self._last_sensors: tuple[SensorState, ...] = ()
+        self._target_aggregator = target_aggregator or TargetAggregator()
+        self._readiness_interpreter = (
+            readiness_interpreter or SensorReadinessInterpreter()
+        )
+        self._target_lock = RLock()
+        self._last_target_evaluated_at: datetime | None = None
+        self._targets: tuple[FusedTarget, ...] = ()
+        self._current_target: FusedTarget | None = None
+        self._sensor_readiness: SensorReadinessSnapshot | None = None
+
+    @property
+    def targets(self) -> tuple[FusedTarget, ...]:
+        return self._targets
+
+    @property
+    def current_target(self) -> FusedTarget | None:
+        return self._current_target
+
+    @property
+    def sensor_readiness(self) -> SensorReadinessSnapshot | None:
+        return self._sensor_readiness
 
     def ingest(self, event: NormalizedEvent) -> PublishResult:
         """Accept an already-normalized future adapter/classifier event."""
 
         enriched = self._recommendations.enrich(event)
         self._policy.require_safe(enriched)
-        return self.event_bus.publish(enriched)
+        self._ingest_target_event(enriched, evaluated_at=enriched.received_at)
+        publication = self.event_bus.publish(enriched)
+        return publication
+
+    def ingest_rf_decision(
+        self,
+        decision: RfDecision,
+        *,
+        received_at: datetime,
+    ) -> tuple[NormalizedEvent, PublishResult]:
+        """Normalize and publish one acquisition-time RF observation.
+
+        This path is intentionally synchronous.  It persists a short generic
+        RF anomaly in the bounded event bus even when the following hardware
+        frame returns to background before the UI requests a snapshot.
+        """
+
+        event = self._normalizer.normalize_rf_decision(
+            decision,
+            now=received_at,
+        )
+        return event, self.ingest(event)
 
     def process_snapshot(
         self,
@@ -62,9 +132,19 @@ class UnifiedSignalProcessor:
         for event in result.events + additional_events:
             enriched = self._recommendations.enrich(event)
             self._policy.require_safe(enriched)
+            self._ingest_target_event(
+                enriched,
+                evaluated_at=snapshot.captured_at,
+            )
             publication = self.event_bus.publish(enriched)
             if publication.accepted:
                 current.append(enriched)
+
+        self._refresh_targets(snapshot.captured_at)
+        self._sensor_readiness = self._readiness_interpreter.interpret(
+            snapshot,
+            now=snapshot.captured_at,
+        )
 
         history = self.event_bus.recent(limit=self._history_limit)
         merged = _unique_events(tuple(current) + history)
@@ -87,6 +167,41 @@ class UnifiedSignalProcessor:
             now=now,
             important_only=important_only,
         )
+
+    def _ingest_target_event(
+        self,
+        event: NormalizedEvent,
+        *,
+        evaluated_at: datetime,
+    ) -> None:
+        if event.event_type not in _TARGET_EVENT_TYPES:
+            return
+        with self._target_lock:
+            target_time = self._non_regressing_target_time(
+                max(evaluated_at, event.received_at)
+            )
+            self._target_aggregator.ingest(event, now=target_time)
+            self._last_target_evaluated_at = target_time
+
+    def _refresh_targets(self, evaluated_at: datetime) -> None:
+        with self._target_lock:
+            target_time = self._non_regressing_target_time(evaluated_at)
+            targets = self._target_aggregator.targets(
+                now=target_time,
+                include_stale=True,
+            )
+            self._last_target_evaluated_at = target_time
+            self._targets = targets
+            self._current_target = next(
+                (target for target in targets if target.active),
+                None,
+            )
+
+    def _non_regressing_target_time(self, value: datetime) -> datetime:
+        previous = self._last_target_evaluated_at
+        if previous is None or value >= previous:
+            return value
+        return previous
 
 
 def _unique_events(

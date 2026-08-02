@@ -1,4 +1,4 @@
-# ALGA VECTOR — Civil Early Warning v0.6 design system
+# ALGA VECTOR 1.0 — Target-centric operator platform design system
 
 ## Product and users
 
@@ -20,6 +20,12 @@ Every fused incident carries measured evidence, a heuristic evidence-strength
 score, alternatives, missing confirmations and limitations. The score is never
 presented as calibrated probability.
 
+The primary product model is `event → fused target → operator presentation`.
+In this context a target is a bounded operational grouping of compatible,
+time-correlated observations. It is not automatically a physical-object
+identity. Several normalized events may contribute to one target; stale targets
+decay and retire instead of remaining as permanent alerts.
+
 ## Visual constraints
 
 - Continue the approved **ALGA VECTOR — Operational Interface (Navigation Refinement)** direction and retain its compact, fixed desktop shell.
@@ -34,18 +40,26 @@ presented as calibrated probability.
 - Radius 5–10 px, thin borders, very soft short shadows only where they clarify
   hierarchy.
 - Minimum click target 32 px; navigation rows 49 px.
+- Important status text: 30–36 px; target title: 21–24 px; card title: 13–14 px;
+  body: 12–14 px. Numeric bearing, frequency and timestamps use tabular figures.
+- Tonal hierarchy: `#050707` canvas → `#0A0F0E` shell → `#111817` primary
+  surface → `#16201E` raised/interactive surface. Native Qt cannot provide
+  reliable background blur, so “glass” means restrained tonal layering and
+  one-pixel translucent-looking borders, never fake blur or low-contrast text.
 
 ## Information architecture
 
-Routes: Dashboard, Devices, Spectrum/RF, Acoustic, Direction, Situation,
-Event Journal, Diagnostics, Settings and Demo/Replay.
+Simple routes: Situation, Devices, Events, Direction and Settings.
 
-The first production increment must make Dashboard, Devices, Spectrum/RF,
-Direction, Event Journal, Diagnostics and Settings executable. Acoustic,
-civilian ADS-B and Fusion must have real core contracts plus deterministic fake
-sources. Situation and Replay may enter as explicit capability-gated modules;
-an unavailable capability is shown honestly rather than represented by an
-inactive button.
+Expert routes: Situation, Overview, Targets, Devices, Spectrum/RF, Events,
+Direction, Map, Diagnostics and Settings.
+
+The 1.0 RC ships Situation as the default executable decision surface.
+Dashboard, Devices, Spectrum/RF, Direction, Event Journal, Diagnostics and
+Settings remain executable. Acoustic, civilian ADS-B and Fusion have real core
+contracts plus deterministic fake sources. Replay remains capability-gated; an
+unavailable capability is shown honestly rather than represented by an inactive
+button.
 
 `Direction` is a bearing-observation workspace, not a radar and not a target
 locator. It shows a 360° dial, sectors, bearing marker, uncertainty cone,
@@ -68,18 +82,49 @@ must never fabricate a target position from a bearing, draw range rings without
 an actual ranging sensor, or turn an RF/acoustic event into geographic
 coordinates.
 
+## Target presentation contract
+
+Every target presentation has:
+
+- `target_id` and lifecycle;
+- `technical_label`, `operator_label`, `operator_explanation`;
+- verbal confirmation stage;
+- source attribution and the sensors actually used;
+- validated direction/sector/zone or an explicit unavailable state;
+- first/last seen timestamps;
+- short and detailed recommendations;
+- evidence strength for Expert Mode only;
+- alternatives, missing confirmation and limitations.
+
+Confirmation stages shown in SIMPLE MODE:
+
+1. `Фон`
+2. `Подозрительная активность`
+3. `Вероятный источник`
+4. `Вероятная цель`
+5. `Подтверждённая цель`
+
+The final stage is allowed only for a policy-approved `TARGET_CONFIRMED`
+normalized event with the required independent physical confirmations. SIMPLE
+MODE never displays a numeric percentage. Expert target breakdown may show the
+raw heuristic score with a persistent “not a calibrated probability” label.
+
 ## Required UX patterns
 
 - Persistent mode switch: `SIMPLE MODE` / `EXPERT MODE`; the existing
   `guided` / `expert` configuration values remain the backward-compatible
   persistence contract. Switching changes navigation and presentation only,
   never acquisition, thresholds or measurement math.
-- `SIMPLE MODE` opens on `Простая обстановка` and consumes only
-  `snapshot.operator_situation`. It must not reconstruct conclusions from IQ,
-  waterfall, RSSI, raw spectrum or legacy detector fields.
-- The simple page has one dominant situation card, then exactly three
-  operator questions: `Где`, `Насколько подтверждено`, `Что делать дальше`.
-  A short recent-event list and `Показывать только важное` filter follow.
+- `SIMPLE MODE` opens on `Простая обстановка` and consumes only interpreted
+  snapshot contracts: `operator_situation`, `current_target`/`targets` and
+  `sensor_readiness`. It must not reconstruct conclusions from IQ, waterfall,
+  RSSI, raw spectrum or legacy detector fields.
+- SIMPLE MODE is the default decision surface. From top to bottom it contains:
+  hero status, current target, compact sector/zone, recommended action, 3–5
+  important events and a seven-sensor readiness strip.
+- The current-target region answers exactly four questions in reading order:
+  `Что это`, `Где`, `Насколько подтверждено`, `Что делать дальше`.
+- A short recent-event list and `Показывать только важное` filter follow.
 - Simple situation modes are `Тишина`, `Фон`, `Активность` and
   `Подтверждённая цель`. The last state is reserved for policy-approved
   `TARGET_CONFIRMED`; generic RF+acoustic correlation remains an anomaly and
@@ -87,14 +132,21 @@ coordinates.
 - `EXPERT MODE` retains Spectrum, Events, Direction, Map and Diagnostics.
   The map is expert-only and never fabricates a target location from one
   bearing or signal level.
+- `EXPERT MODE` adds a target breakdown workspace grouped by task: target
+  lifecycle, source attribution, evidence, raw confidence, direction validity,
+  limitations and replay/calibration context.
 - Every recommendation includes `Why`, `Evidence`, `Evidence strength`,
   `Missing confirmation`, `Limitations` and `What to do next`.
-- Dashboard has one dominant incident-state card, a four-sensor readiness row
-  (`Acoustic`, `RF`, `DF`, `Civil ADS-B`) and one recent-event timeline. The
-  novice view shows no more than three evidence points and one next action.
-- A multi-sensor warning is visually stronger only after temporal confirmation
-  and independent acoustic + RF evidence. A single-sensor anomaly remains
-  clearly marked `unconfirmed`.
+- The readiness strip always reserves stable positions for `TinySA`, `RTL-SDR`,
+  `KrakenSDR`, `Acoustic`, `ADS-B`, `Passive radar` and `Fusion`. Each tile has
+  `ready`, `limited` or `unavailable`, one short reason and its operational
+  impact. Missing hardware does not collapse or reorder the strip.
+- The novice view shows no more than one current target, one verbal confirmation
+  stage, five important events and one primary next action.
+- Visual escalation follows the normalized event or target confirmation stage
+  and policy-approved evidence; it is never inferred from a hard-coded
+  acoustic + RF pair. Generic multi-sensor correlation and a single-sensor
+  anomaly remain clearly marked `unconfirmed`.
 - A compact non-modal RF observation bar may appear under the global header. It
   names only an evidence-supported signal family and links to Signal Events.
   Its tooltip carries measured evidence, confidence wording, alternatives and
@@ -118,8 +170,10 @@ coordinates.
 
 ## Motion
 
-No decorative animation. Use only status transitions, progress, a low-rate
-activity indicator and a short bearing-trail fade. Respect reduced motion.
+No decorative animation. Use 120–180 ms easing only for status-color
+transitions, card replacement, progress, a low-rate activity indicator and a
+short bearing-trail fade. Never animate live plots through the main UI thread.
+Respect reduced motion.
 
 ## Required direction screen composition
 
@@ -133,18 +187,19 @@ activity indicator and a short bearing-trail fade. Respect reduced motion.
 - Empty state occupies the dial itself and explains why direction is unavailable.
 - Never show distance rings in kilometres, a geographic position or target icon.
 
-## Required dashboard composition
+## Required SIMPLE MODE composition
 
-- Header: `Гражданское раннее предупреждение`, profile, mode and overall health.
-- Primary state: `Наблюдение спокойно`, `Неподтверждённая аномалия`,
-  `Подтверждённый многосенсорный инцидент` or `Данные ненадёжны`.
-- Primary card explains measured facts first, then correlation and limitations.
-- Sensor row: one compact card per Acoustic/RF/DF/Civil ADS-B with
-  ready/degraded/unavailable state, freshness and provenance.
-- Recent timeline: timestamp, generic event family, contributing sensors,
-  evidence strength and lifecycle.
-- Guided mode has one primary button. Expert mode may expose evidence tables,
-  quality flags and source IDs.
+- Hero: verbal environment state and one plain-language explanation.
+- Current target: probable general type, target ID only as quiet metadata,
+  verbal confirmation stage, sensors used and last seen.
+- Sector: compact 360° view only for a fresh validated external direction. Its
+  empty state occupies the same space and names the missing prerequisite.
+- Recommendation: one strong short action and one quieter detailed explanation.
+- Events: at most five important items with time, operator label and short
+  explanation.
+- Readiness: seven fixed compact sensor tiles with reason and impact tooltips.
+- Guided mode has one primary action. Technical identifiers, raw percentages,
+  quality flags and evidence tables remain in Expert Mode.
 - No wording may say that an aircraft type, nationality or hostile intent was
   established.
 

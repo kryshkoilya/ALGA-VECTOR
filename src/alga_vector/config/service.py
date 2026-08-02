@@ -197,6 +197,23 @@ def _migrate_mapping(payload: dict[str, Any]) -> dict[str, Any]:
         migrated.setdefault("fusion", {})
         migrated["schema_version"] = 5
         version = 5
-    if version != 5:
+    if version == 5:
+        # v6 adds bounded target aggregation. Defaults only group already
+        # accepted normalized events and do not enable a new sensor or weaken
+        # the fail-closed event policy.
+        migrated.setdefault("target_tracking", {})
+        migrated["schema_version"] = 6
+        version = 6
+    if version == 6:
+        # v7 makes field sensitivity explicit. Existing profiles retain the
+        # field-oriented default so an upgrade cannot silently return to the
+        # former conservative threshold policy.
+        raw_spectrum = migrated.get("spectrum")
+        spectrum = dict(raw_spectrum) if isinstance(raw_spectrum, dict) else {}
+        spectrum.setdefault("detection_sensitivity", "high")
+        migrated["spectrum"] = spectrum
+        migrated["schema_version"] = 7
+        version = 7
+    if version != 7:
         raise ValueError(f"unsupported schema_version: {version!r}")
     return migrated

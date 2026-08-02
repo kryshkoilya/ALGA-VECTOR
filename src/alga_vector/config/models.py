@@ -107,6 +107,7 @@ class SpectrumConfig(StrictModel):
     span_hz: int = Field(default=2_000_000, ge=1_000)
     sample_rate_hz: int = Field(default=2_400_000, ge=8_000)
     threshold_level: float = Field(default=-72.4, ge=-200, le=30)
+    detection_sensitivity: Literal["low", "balanced", "high"] = "high"
 
 
 class AcousticConfig(StrictModel):
@@ -156,6 +157,40 @@ class FusionConfig(StrictModel):
     window_seconds: float = Field(default=8.0, ge=1.0, le=120.0)
     min_consecutive_observations: int = Field(default=3, ge=3, le=20)
     hold_seconds: float = Field(default=4.0, ge=0.5, le=60.0)
+
+
+class TargetTrackingConfig(StrictModel):
+    """Bounded target aggregation and expiry policy.
+
+    A target is an operational grouping of compatible observations, not an
+    assertion about physical identity, distance or intent.
+    """
+
+    correlation_window_seconds: float = Field(default=12.0, ge=1.0, le=300.0)
+    deduplication_window_seconds: float = Field(default=4.0, ge=0.1, le=60.0)
+    decay_half_life_seconds: float = Field(default=18.0, ge=1.0, le=600.0)
+    stale_after_seconds: float = Field(default=30.0, ge=5.0, le=900.0)
+    retire_after_seconds: float = Field(default=90.0, ge=10.0, le=3_600.0)
+    maximum_active_targets: int = Field(default=64, ge=1, le=512)
+
+    @model_validator(mode="after")
+    def lifecycle_windows_are_ordered(self) -> Self:
+        if self.stale_after_seconds <= self.correlation_window_seconds:
+            raise ValueError(
+                "target stale_after_seconds must be greater than "
+                "correlation_window_seconds"
+            )
+        if self.retire_after_seconds <= self.stale_after_seconds:
+            raise ValueError(
+                "target retire_after_seconds must be greater than "
+                "stale_after_seconds"
+            )
+        if self.decay_half_life_seconds > self.retire_after_seconds:
+            raise ValueError(
+                "target decay_half_life_seconds must not exceed "
+                "retire_after_seconds"
+            )
+        return self
 
 
 class MapConfig(StrictModel):
@@ -215,7 +250,7 @@ class LoggingConfig(StrictModel):
 
 
 class AppConfig(StrictModel):
-    schema_version: Literal[5] = 5
+    schema_version: Literal[7] = 7
     locale: Literal["ru"] = "ru"
     profile_name: str = Field(default="Полевой профиль 01", min_length=1, max_length=128)
     mode: Literal["live", "demo", "safe"] = "live"
@@ -226,6 +261,9 @@ class AppConfig(StrictModel):
     acoustic: AcousticConfig = Field(default_factory=AcousticConfig)
     airspace: AirspaceConfig = Field(default_factory=AirspaceConfig)
     fusion: FusionConfig = Field(default_factory=FusionConfig)
+    target_tracking: TargetTrackingConfig = Field(
+        default_factory=TargetTrackingConfig
+    )
     map: MapConfig = Field(default_factory=MapConfig)
     location: LocationPolicyConfig = Field(default_factory=LocationPolicyConfig)
     ui: UiConfig = Field(default_factory=UiConfig)

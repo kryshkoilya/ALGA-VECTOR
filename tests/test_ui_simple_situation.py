@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: RUF001
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +13,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 from alga_vector.ui.pages.simple_situation import SimpleSituationPage
+
+NOW = datetime(2026, 7, 26, 12, 34, 57, tzinfo=UTC)
 
 
 @pytest.fixture(scope="module")
@@ -25,11 +27,17 @@ def qt_app() -> QApplication:
     )
 
 
-def _snapshot(situation: object | None) -> SimpleNamespace:
+def _snapshot(
+    situation: object | None,
+    *,
+    current_target: object | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         mode="live",
         runtime_mode="live",
         operator_situation=situation,
+        current_target=current_target,
+        captured_at=NOW,
     )
 
 
@@ -61,8 +69,14 @@ def test_simple_page_renders_interpreted_activity_and_filters_events(
         ),
         direction=SimpleNamespace(
             available=True,
+            validated_external=True,
+            associated_target_id="target-associated-direction",
+            bearing_deg=107.5,
+            uncertainty_deg=12.5,
             sector_text_ru="Сектор 95–120°",
             explanation_ru="Сектор передан валидированным внешним DF-сенсором.",
+            observed_at=NOW - timedelta(seconds=1),
+            valid_until=NOW + timedelta(seconds=2),
         ),
         confidence=SimpleNamespace(
             level="high",
@@ -93,9 +107,18 @@ def test_simple_page_renders_interpreted_activity_and_filters_events(
             ),
         ),
     )
+    target = SimpleNamespace(
+        target_id="target-associated-direction",
+        lifecycle="active",
+        active=True,
+        confirmation_stage="likely_source",
+        operator_label=situation.headline_ru,
+        operator_explanation=situation.explanation_ru,
+        direction=situation.direction,
+    )
     page = SimpleSituationPage()
 
-    page.refresh(_snapshot(situation))
+    page.refresh(_snapshot(situation, current_target=target))
     qt_app.processEvents()
 
     assert page.mode_label.text() == "АКТИВНОСТЬ"

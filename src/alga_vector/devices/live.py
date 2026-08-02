@@ -109,7 +109,6 @@ class TinySASerialAdapter(DeviceAdapter):
             health=HealthLevel.HEALTHY,
             capabilities=self.capabilities,
             driver=f"USB CDC · {self._version or 'firmware version unavailable'}",
-            last_data_at=self._clock(),
             generation=1,
             metrics={
                 "transport": "serial",
@@ -175,6 +174,16 @@ class TinySASerialAdapter(DeviceAdapter):
             calibration_id=None,
             uncertainty_db=None,
         )
+
+    def capture_metrics(self) -> dict[str, float | int | str]:
+        profile = self._receiver_profile
+        return {
+            "transport": "serial",
+            "configured_model": self.model_override,
+            "detected_model": self._detected_model.value,
+            "tuning_profile_id": profile.profile_id,
+            "ultra_mode_operator_confirmed": int(self.ultra_mode_enabled),
+        }
 
     def close(self) -> None:
         self._close_port()
@@ -328,7 +337,6 @@ class RtlSdrAdapter(DeviceAdapter):
             capabilities=self.capabilities,
             driver="pyrtlsdr/librtlsdr",
             sample_rate_hz=self.sample_rate_hz,
-            last_data_at=self._clock(),
             generation=1,
             metrics={
                 "device_index": self.index,
@@ -368,6 +376,12 @@ class RtlSdrAdapter(DeviceAdapter):
                     self._input_mode.value
                     if self._input_mode is not None
                     else "not_tuned"
+                ),
+                "gain_mode": "auto",
+                "applied_gain": (
+                    str(self._applied_gain)
+                    if self._applied_gain is not None
+                    else "pending_first_capture"
                 ),
             },
         )
@@ -485,6 +499,24 @@ class RtlSdrAdapter(DeviceAdapter):
             unit="dBFS",
         )
 
+    def capture_metrics(self) -> dict[str, float | int | str]:
+        return {
+            "device_index": self.index,
+            "sample_rate_hz": self.sample_rate_hz,
+            "gain_mode": "auto",
+            "applied_gain": (
+                str(self._applied_gain)
+                if self._applied_gain is not None
+                else "not_applied"
+            ),
+            "active_input_mode": (
+                self._input_mode.value
+                if self._input_mode is not None
+                else "not_tuned"
+            ),
+            "tuning_profile_id": self._tuning_profile.profile_id,
+        }
+
     def close(self) -> None:
         self._close_receiver()
         super().close()
@@ -588,13 +620,7 @@ class RtlSdrAdapter(DeviceAdapter):
             if receiver is not None:
                 with suppress(Exception):
                     receiver.close()
-            raise AppError(
-                code="DEVICE.RTLSDR_OPEN_FAILED",
-                message_ru="Не удалось открыть выбранный RTL-SDR.",
-                operator_action_ru="Проверьте индекс устройства и драйвер WinUSB.",
-                retryable=True,
-                technical_details={"device_index": self.index, "error": f"{type(exc).__name__}: {exc}"},
-            ) from exc
+            raise _classify_rtlsdr_open_failure(module, self.index, exc) from exc
 
     def _select_input_mode(
         self,
@@ -663,6 +689,150 @@ def _decode_usb_label(buffer: Any) -> str:
     except (TypeError, ValueError):
         return ""
     return payload.split(b"\0", 1)[0].decode("utf-8", errors="replace").strip()
+
+
+def _rtlsdr_descriptor_count(module: Any) -> int | None:
+    """Return a descriptor count without opening a receiver, when supported."""
+
+    library = getattr(module, "librtlsdr", None)
+    candidates = (
+        getattr(library, "rtlsdr_get_device_count", None),
+        getattr(getattr(module, "RtlSdr", None), "get_device_count", None),
+    )
+    for candidate in candidates:
+        if not callable(candidate):
+            continue
+        try:
+            count = int(candidate())
+        except Exception:
+            continue
+        if count >= 0:
+            return count
+    return None
+
+
+def _classify_rtlsdr_open_failure(
+    module: Any,
+    index: int,
+    exc: Exception,
+) -> AppError:
+    """Build a safe, actionable error without exposing backend error text."""
+
+    descriptor_count = _rtlsdr_descriptor_count(module)
+    text = str(exc).casefold()
+    os_error_code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+    details: dict[str, int | str] = {
+        "device_index": index,
+        "error_type": type(exc).__name__,
+    }
+    if descriptor_count is not None:
+        details["descriptor_count"] = descriptor_count
+    if isinstance(os_error_code, int):
+        details["os_error_code"] = os_error_code
+
+    descriptor_absent = (
+        descriptor_count is not None and index >= descriptor_count
+    ) or any(
+        marker in text
+        for marker in (
+            "no supported devices",
+            "no device found",
+            "device not found",
+            "invalid device index",
+        )
+    )
+    if descriptor_absent:
+        details["failure_class"] = "descriptor_absent"
+        return AppError(
+            code="DEVICE.RTLSDR_DESCRIPTOR_ABSENT",
+            message_ru="RTL-SDR с выбранным индексом больше не найден.",
+            operator_action_ru=(
+                "Переподключите RTL-SDR, запустите повторный поиск "
+                "устройств и выберите новый индекс."
+            ),
+            retryable=True,
+            technical_details=details,
+        )
+
+    busy = os_error_code in {16, 32} or any(
+        marker in text
+        for marker in (
+            "resource busy",
+            "device busy",
+            "already claimed",
+            "in use",
+            "sharing violation",
+        )
+    )
+    if busy:
+        details["failure_class"] = "device_busy"
+        return AppError(
+            code="DEVICE.RTLSDR_BUSY",
+            message_ru="RTL-SDR найден, но занят другим процессом.",
+            operator_action_ru=(
+                "Закройте SDR#, другие программы SDR и все другие экземпляры "
+                "ALGA VECTOR, проверьте WinUSB, затем переподключите RTL-SDR."
+            ),
+            retryable=True,
+            technical_details=details,
+        )
+
+    access_denied = os_error_code in {5, 13} or any(
+        marker in text
+        for marker in (
+            "access denied",
+            "permission denied",
+            "not permitted",
+            "insufficient permission",
+        )
+    )
+    if access_denied:
+        details["failure_class"] = "access_denied"
+        return AppError(
+            code="DEVICE.RTLSDR_ACCESS_DENIED",
+            message_ru="Windows не разрешила ALGA VECTOR открыть RTL-SDR.",
+            operator_action_ru=(
+                "Закройте SDR# и другие экземпляры ALGA VECTOR, проверьте "
+                "WinUSB для нужного USB-интерфейса и переподключите приёмник."
+            ),
+            retryable=True,
+            technical_details=details,
+        )
+
+    driver_failure = any(
+        marker in text
+        for marker in (
+            "libusb",
+            "winusb",
+            "driver",
+            "backend",
+            "dll",
+        )
+    )
+    if driver_failure:
+        details["failure_class"] = "driver_or_backend"
+        return AppError(
+            code="DEVICE.RTLSDR_DRIVER_UNAVAILABLE",
+            message_ru="Драйвер или USB-бэкенд RTL-SDR недоступен.",
+            operator_action_ru=(
+                "Проверьте WinUSB для нужного USB-интерфейса, закройте SDR# "
+                "и другие экземпляры ALGA VECTOR, затем переподключите RTL-SDR."
+            ),
+            retryable=True,
+            technical_details=details,
+        )
+
+    details["failure_class"] = "open_failed"
+    return AppError(
+        code="DEVICE.RTLSDR_OPEN_FAILED",
+        message_ru="Не удалось открыть выбранный RTL-SDR.",
+        operator_action_ru=(
+            "Закройте SDR# и другие экземпляры ALGA VECTOR, проверьте "
+            "WinUSB, переподключите RTL-SDR и повторите поиск."
+        ),
+        retryable=True,
+        technical_details=details,
+    )
 
 
 def _parse_rtlsdr_index(connection: str) -> int:
